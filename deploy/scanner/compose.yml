@@ -1,0 +1,15 @@
+name: grocery-scanner
+
+services:
+  scanner:
+    image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER is required}/grocery-scanner:${GROCERY_VERSION:-latest}
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - /dev/input:/dev/input:ro
+      - scanner_data:/data
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  scanner_data:

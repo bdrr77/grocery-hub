@@ -1,0 +1,54 @@
+name: grocery-hub-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: grocery
+      POSTGRES_USER: grocery
+      POSTGRES_PASSWORD: grocery
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev:/var/lib/postgresql/data
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: ./apps/api
+    environment:
+      DATABASE_URL: postgresql+psycopg://grocery:grocery@postgres:5432/grocery
+      REDIS_URL: redis://redis:6379/0
+      SCANNER_DEVICE_TOKENS: dev:dev-token
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+
+  worker:
+    build: ./apps/worker
+    environment:
+      DATABASE_URL: postgresql+psycopg://grocery:grocery@postgres:5432/grocery
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres_dev:
