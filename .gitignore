@@ -5,6 +5,9 @@ __pycache__/
 .pytest_cache/
 node_modules/
 .next/
+.venv/
+.pnpm-store/
+*.tsbuildinfo
 .DS_Store
 .idea/
 .vscode/

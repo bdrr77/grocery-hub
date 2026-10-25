@@ -98,7 +98,6 @@ GHCR_OWNER=your-github-user-or-org
 GROCERY_VERSION=0.2.0
 POSTGRES_PASSWORD=<long-random-password>
 DATABASE_URL=postgresql+psycopg://grocery:<same-password>@postgres:5432/grocery
-NEXT_PUBLIC_API_URL=https://grocery-api.example.com
 SCANNER_DEVICE_TOKENS=kitchen:<long-random-device-token>
 ```
 
@@ -136,6 +135,27 @@ Expected response:
 ```
 
 The web UI is exposed on port `3000` and the API on port `8000`.
+
+The web container proxies `/api/v1/items` and `/api/v1/integrations` to the API using
+`API_INTERNAL_URL=http://api:8000`, configured in Compose. The browser only talks to
+the web hostname, so no public API URL, CORS setup, or build-time URL is needed.
+For running Next.js outside Docker, set `API_INTERNAL_URL=http://127.0.0.1:8000`.
+
+The API creates the initial shopping-list and scan-receipt tables on startup. EAN
+entry and authenticated scanner submissions persist to PostgreSQL; retrying the
+same device/event pair does not increment the quantity twice. A new event for the
+same barcode increments its quantity. Product names are looked up in Open Food
+Facts, with a barcode label used if the product is unknown or lookup fails.
+
+Picnic and Chronodrive currently report `not_implemented`. Their adapters are stubs:
+setting store credentials does not connect an account or synchronize a cart. The UI
+shows this explicitly and does not display sample products or fabricated prices.
+
+After publishing images containing these changes, update the server checkout (including
+`compose.yml`), select that image version in `.env`, then run `docker compose pull`
+and `docker compose up -d`. Updating the checkout alone does not rebuild production
+images. To build directly from a checkout for a local smoke test, run
+`docker compose -f compose.dev.yml up --build` from the repository root.
 
 ### Reverse proxy / TLS
 
@@ -231,9 +251,10 @@ SQLite spool on Pi
                                remove from spool
 ```
 
-Each scan has an `event_id` idempotency key. The server persistence layer should enforce
-that key when the database implementation is added, allowing safe retries without
-creating duplicate shopping-list events.
+Each scan has an `event_id` idempotency key. The server enforces uniqueness per device
+and saves the receipt and shopping-list mutation in one database transaction. Reusing
+an event ID with a different barcode returns HTTP 409. Removing an item retains its
+scan receipts so late delivery retries cannot recreate it.
 
 You can therefore reboot the server, lose Wi-Fi temporarily, or restart the scanner
 container without intentionally losing scans.

@@ -68,7 +68,7 @@ services:
     image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER is required}/grocery-web:${GROCERY_VERSION:-latest}
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+      API_INTERNAL_URL: http://api:8000
     ports:
       - "3000:3000"
     depends_on:

@@ -5,6 +5,12 @@ class HealthResponse(BaseModel):
     status: str
 
 
+class ShoppingItemResponse(BaseModel):
+    ean: str
+    label: str
+    quantity: int
+
+
 class ScanRequest(BaseModel):
     barcode: str = Field(min_length=8, max_length=32, pattern=r"^[0-9]+$")
     event_id: str = Field(min_length=8, max_length=128)
