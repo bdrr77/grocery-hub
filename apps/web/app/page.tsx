@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import ProductSearch, { ShopBadge } from "./product-search";
 
-type Item = { ean: string; label: string; quantity: number; size?:string|null; source?:string|null };
+type Item = { ean: string; label: string; quantity: number; size?:string|null; source?:string|null; brand?:string|null };
 type Lookup = {status:string;message:string;checked_at:number};
 type SyncItem = { ean: string; quantity: number; status: string; message: string; product_id: string | null; product_name: string | null; price_cents: number | null; size?:string; unit_price_cents?:number|null; unit_price_unit?:string|null; ean_lookup?:Lookup|null };
 type Pricing = {updating?:boolean;fresh:boolean;fetched_at:number|null;list_complete:boolean;list_total_cents:number|null;known_list_total_cents:number|null;priced_items:number;item_count:number;missing_items:number;cart_total_cents:number|null;deposit_cents:number|null;fees_cents:number|null;discount_cents:number|null;other_cart_items:number|null};
@@ -183,7 +183,7 @@ export default function Home() {
       <h2 id="list-title">Ma liste <span className="count">{items.reduce((sum, item) => sum + item.quantity, 0)} article(s)</span></h2>
       {loading ? <p role="status">Chargement de la liste…</p> : !items.length && !error ? <p className="empty">Votre liste est vide. Ajoutez votre premier code-barres ci-dessus.</p> : null}
       <div className="grid">{items.map(item => <article key={item.ean}>
-        <h3>{item.label}</h3>{item.size && <p className="item-pack">{item.size}</p>}{item.source==="openfoodfacts" && <ShopBadge source="openfoodfacts"/>}<p className="ean">{item.ean.startsWith("n") ? "Produit ajouté par nom" : `EAN ${item.ean}`}</p><div className="item-actions"><div className="quantity-controls"><button type="button" disabled={busy || item.quantity<=1} aria-label={`Diminuer ${item.label}`} onClick={()=>void quantity(item,item.quantity-1)}>−</button><strong>Quantité : {item.quantity}</strong><button type="button" disabled={busy || item.quantity>=999} aria-label={`Augmenter ${item.label}`} onClick={()=>void quantity(item,item.quantity+1)}>+</button></div><button type="button" disabled={busy} aria-label={`Retirer ${item.label}`} onClick={() => void remove(item.ean)}>Retirer</button></div>
+        <h3>{item.label}</h3>{item.brand && <p className="result-brand">{item.brand}</p>}{item.size && <p className="item-pack">{item.size}</p>}{item.source==="openfoodfacts" && <ShopBadge source="openfoodfacts"/>}<p className="ean">{item.ean.startsWith("n") ? "Produit ajouté par nom" : `EAN ${item.ean}`}</p><div className="item-actions"><div className="quantity-controls"><button type="button" disabled={busy || item.quantity<=1} aria-label={`Diminuer ${item.label}`} onClick={()=>void quantity(item,item.quantity-1)}>−</button><strong>Quantité : {item.quantity}</strong><button type="button" disabled={busy || item.quantity>=999} aria-label={`Augmenter ${item.label}`} onClick={()=>void quantity(item,item.quantity+1)}>+</button></div><button type="button" disabled={busy} aria-label={`Retirer ${item.label}`} onClick={() => void remove(item.ean)}>Retirer</button></div>
         <div className="item-stores">{connections.map(store => {
           const job = store.items.find(job => job.ean === item.ean);
           return <div key={store.id}><ShopBadge source={store.id}/>{job?.product_name && <span>{job.product_name}</span>}

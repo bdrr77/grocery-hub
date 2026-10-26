@@ -118,6 +118,19 @@ def add_barcode(barcode: str, event_id: str, device_id: str, label: str) -> None
 
 def list_items() -> list[dict]:
     with engine.connect() as connection:
-        return [dict(row) for row in connection.execute(
+        result = [dict(row) for row in connection.execute(
             select(items, item_details.c.size, item_details.c.source).select_from(items.outerjoin(item_details, items.c.ean == item_details.c.ean)).order_by(items.c.label, items.c.ean)
         ).mappings()]
+        facts = {row["ean"]:row["data"] for row in connection.execute(select(product_facts)).mappings()}
+        matches = list(connection.execute(select(targets).where(targets.c.quantity > 0, targets.c.product_id.is_not(None))).mappings())
+        for item in result:
+            brand = facts.get(item["ean"], {}).get("brand", "")
+            if not brand:
+                for match in matches:
+                    if match["ean"] == item["ean"]:
+                        product = next((p for p in match["candidates"] if p["id"] == match["product_id"]), {})
+                        brand = product.get("brand", "")
+                        if brand:
+                            break
+            item["brand"] = brand or None
+        return result

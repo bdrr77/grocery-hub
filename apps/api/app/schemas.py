@@ -11,6 +11,7 @@ class ShoppingItemResponse(BaseModel):
     quantity: int
     size: str | None = None
     source: str | None = None
+    brand: str | None = None
 
 
 class ProductSearchRequest(BaseModel):

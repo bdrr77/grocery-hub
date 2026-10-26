@@ -56,4 +56,9 @@ def product_details(barcode: str) -> dict | None:
 def product_label(barcode: str) -> str:
     """An unknown product or unavailable catalog must still allow saving."""
     details = product_details(barcode)
+    if details:
+        from .database import engine, insert_for, product_facts
+        with engine.begin() as connection:
+            entry = insert_for(product_facts).values(ean=barcode,data=details,fetched_at=time.time())
+            connection.execute(entry.on_conflict_do_update(index_elements=[product_facts.c.ean],set_={"data":details,"fetched_at":time.time()}))
     return details["name"] if details else f"EAN {barcode}"

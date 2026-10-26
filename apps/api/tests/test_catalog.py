@@ -41,7 +41,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(result.json()["results"][0]["offers"][0]["source"],"openfoodfacts")
         saved=self.client.post("/api/v1/items/8076800376999/identity",json={"code":product["id"]})
         self.assertEqual(saved.status_code,200)
-        self.assertEqual(saved.json()[0],{"ean":"8076800376999","label":"Barilla Lasagne","quantity":1,"size":"500 g","source":"openfoodfacts"})
+        self.assertEqual(saved.json()[0],{"ean":"8076800376999","label":"Barilla Lasagne","quantity":1,"size":"500 g","source":"openfoodfacts","brand":None})
         with engine.connect() as connection:
             jobs=connection.execute(select(targets)).mappings().all()
             self.assertTrue(all(job["product_id"] is None for job in jobs))
@@ -195,6 +195,20 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(status["pricing"]["cart_total_cents"],1596)
         self.assertEqual(status["pricing"]["list_total_cents"],0)
         self.assertEqual(store.cart,{"unrelated":4})
+
+    def test_new_card_exposes_off_brand_without_a_second_lookup(self):
+        self.lookup.stop()
+        with patch("app.products.product_details",return_value={"name":"Lasagne","brand":"Barilla","size":"500 g"}) as lookup:
+            response=self.add(barcode="8076800376999")
+            self.assertEqual(response.json()[0]["brand"],"Barilla")
+            self.assertEqual(self.client.get("/api/v1/items").json()[0]["brand"],"Barilla")
+            lookup.assert_called_once_with("8076800376999")
+
+    def test_card_falls_back_to_matched_store_brand(self):
+        self.add()
+        with engine.begin() as connection:
+            connection.execute(update(targets).where(targets.c.store=="picnic").values(product_id="p1",candidates=[{"id":"p1","brand":"Ferrero"}]))
+        self.assertEqual(self.client.get("/api/v1/items").json()[0]["brand"],"Ferrero")
 
 
 def tearDownModule():
