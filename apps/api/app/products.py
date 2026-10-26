@@ -38,7 +38,7 @@ def _product_search(query, time_bucket):
 
 def product_details(barcode: str) -> dict | None:
     request = Request(
-        f"https://world.openfoodfacts.org/api/v3/product/{barcode}?fields=product_name,product_name_fr,brands,quantity",
+        f"https://world.openfoodfacts.org/api/v3/product/{barcode}?product_type=all&fields=product_name,product_name_fr,generic_name,generic_name_fr,brands,quantity",
         headers={"User-Agent": "GroceryHub/0.3 (https://grocery.dabrome.com)"},
     )
     try:
@@ -47,7 +47,8 @@ def product_details(barcode: str) -> dict | None:
         product = data.get("product") or {}
         label = product.get("product_name_fr") or product.get("product_name")
         if isinstance(label, str) and label.strip():
-            return {"name":label.strip()[:250], "brand":product.get("brands", "")[:100] if isinstance(product.get("brands", ""),str) else "", "size":product.get("quantity", "")[:100] if isinstance(product.get("quantity", ""),str) else ""}
+            description = product.get("generic_name_fr") or product.get("generic_name") or ""
+            return {"name":label.strip()[:250], "description":description[:250] if isinstance(description,str) else "", "brand":product.get("brands", "")[:100] if isinstance(product.get("brands", ""),str) else "", "size":product.get("quantity", "")[:100] if isinstance(product.get("quantity", ""),str) else ""}
     except (OSError, ValueError, TypeError, AttributeError):
         log.info("Product lookup unavailable for %s; saving barcode", barcode)
     return None

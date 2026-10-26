@@ -150,7 +150,7 @@ async def operate(store, action="sync", *, ean=None, query=None, product_id=None
         elif action == "sync":
             await sync_targets(store, adapter, owner)
         elif action == "resolve":
-            await sync_targets(store, adapter, owner, ean=ean)
+            await sync_targets(store, adapter, owner, ean=ean, fallback=False)
         if action in {"sync", "connect", "verify-code", "refresh", "resolve"}:
             snapshot = await adapter.get_cart_details()
             with engine.begin() as connection:
@@ -180,7 +180,7 @@ async def operate(store, action="sync", *, ean=None, query=None, product_id=None
         save_state(store, owner, lease_owner="", lease_until=0)
 
 
-async def sync_targets(store, adapter, owner, ean=None):
+async def sync_targets(store, adapter, owner, ean=None, fallback=True):
     with engine.connect() as connection:
         jobs = [dict(row) for row in connection.execute(select(targets).where(
             targets.c.store == store, targets.c.status != "synced", targets.c.status != "unmatched", targets.c.retry_at <= time.time(), *([targets.c.ean == ean] if ean else [])
@@ -223,8 +223,19 @@ async def sync_targets(store, adapter, owner, ean=None):
         except ConnectorError as error:
             if error.status in {"auth_error", "otp_required", "access_denied", "rate_limited", "unavailable"}:
                 raise
+            values = {"status":error.status,"message":error.message,"retry_at":time.time()+300}
+            if error.status == "unmatched" and not job["product_id"]:
+                values["candidates"] = []
+            if fallback and error.status == "unmatched" and job["quantity"] > 0 and job["ean"].isdigit() and not job["product_id"]:
+                from .matching import automatic_equivalents
+                try:
+                    values["candidates"] = await automatic_equivalents(job["ean"],adapter)
+                except ConnectorError as fallback_error:
+                    if fallback_error.status in {"auth_error","otp_required","access_denied","rate_limited"}:
+                        raise
+                    values["message"] = "Recherche d’équivalents indisponible. Actualisez ce produit pour réessayer."
             with engine.begin() as connection:
-                connection.execute(update(targets).where(*condition).values(status=error.status, message=error.message, retry_at=time.time() + 300))
+                connection.execute(update(targets).where(*condition).values(**values))
 
 
 def record_lookup(store, ean, status, message):

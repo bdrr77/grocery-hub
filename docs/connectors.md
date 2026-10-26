@@ -128,8 +128,10 @@ badges, store prices and pack sizes. Cards display up to ten rows; a separate br
 tab shows all returned results and supports selection. Similar names never authorize
 a cart association. Selecting a result replaces an unresolved item's EAN, name and
 pack while retaining its shopping quantity, and queues store matching. Store results
-without a verifiable barcode cannot replace an EAN. An existing mapped item or a
-duplicate destination EAN cannot be overwritten. Open Food Facts supplies no price.
+without a barcode can still be selected explicitly: the original EAN is retained and
+the shop's product ID is associated. Different shops can have different equivalents
+without losing existing choices. A duplicate destination EAN cannot be overwritten.
+Open Food Facts supplies no price.
 Directory name searches are cached for five minutes. Failures in one source do not
 suppress the other sources' results.
 
@@ -137,6 +139,19 @@ Card refresh retries the EAN in connected shops first, fetches fresh Open Food F
 metadata without using its positive or negative cache, then automatically searches
 unmatched connected shops with the returned brand, name and pack size. Candidates
 open directly for explicit selection, without requiring the user to type a query.
+
+The ordinary worker now performs this fallback after an unsuccessful barcode lookup,
+not only after a card refresh. It uses cached positive OFF metadata when available,
+otherwise fetches it, and saves name-search candidates without adding them to a cart.
+The card reads these saved candidates and opens its list automatically when the worker
+finishes. It stops if OFF has no metadata. Searches progressively drop brand/pack
+constraints, try a generic description when provided and finally a product-name keyword
+to expose equivalents. Full-results tabs reuse the saved automatic candidates.
+
+Barcode lookup requests `product_type=all`, following OFF's redirects to Open Beauty
+Facts, Open Pet Food Facts and Open Products Facts. A beauty-classified product must
+not be treated as absent just because the food-only endpoint returns a 404.
+See the [universal barcode API documentation](https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/tutorials/scanning-cosmetics-pet-food-and-other-products/).
 
 The worker polls every 30 seconds by default, then makes the store requests. Queued
 lookups and cart updates display a spinner beside the shop; errors and unresolved

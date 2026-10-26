@@ -31,10 +31,13 @@ class ShoppingListTests(unittest.TestCase):
         self.client = self.client_context.__enter__()
         self.lookup = patch("app.main.product_label", return_value="Test product")
         self.lookup.start()
+        self.off_fallback = patch("app.matching.product_details",return_value=None)
+        self.off_fallback.start()
 
     def tearDown(self):
         self.credentials.stop()
         self.lookup.stop()
+        self.off_fallback.stop()
         self.client_context.__exit__(None, None, None)
 
     def add(self, event="web-event-1", barcode="3017620422003"):

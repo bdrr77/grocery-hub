@@ -12,7 +12,7 @@ from .connectors.base import ConnectorError
 from .integration_service import initialize, operate, public_status
 from .products import product_label
 from .matching import search_suggestions
-from .catalog import search_catalog, use_directory_identity, refresh_product, choose_store_product
+from .catalog import search_catalog, use_directory_identity, refresh_product, choose_store_product, cached_equivalents
 from .schemas import ProductSearchRequest, ProductIdentityRequest, ProductSelectionRequest
 from .schemas import HealthResponse, ScanRequest, ScanResponse, ShoppingItemResponse, StoreSearchRequest, StoreMatchRequest, VerificationRequest, NamedItemRequest, QuantityRequest
 
@@ -149,6 +149,14 @@ async def search_item_catalog(ean: str, payload: ProductSearchRequest):
         return await search_catalog(ean, payload.query)
     except ConnectorError as error:
         raise HTTPException(status_code=404 if error.status == "not_found" else 422, detail=error.message) from error
+
+
+@app.get("/api/v1/items/{ean}/equivalents")
+def get_equivalents(ean: str):
+    try:
+        return cached_equivalents(ean)
+    except ConnectorError as error:
+        raise HTTPException(status_code=404,detail=error.message) from error
 
 
 @app.post("/api/v1/items/{ean}/identity", response_model=list[ShoppingItemResponse])

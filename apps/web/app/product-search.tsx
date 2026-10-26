@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 type Offer = {source:string;id:string;name:string;size:string;eans?:string[];price_cents:number|null;unit_price_cents:number|null;unit_price_unit:string|null};
 type Result = {name:string;brand?:string;size:string;codes:string[];offers:Offer[]};
-type Search = {results:Result[];messages:{source:string;name:string;message:string}[]};
+export type Search = {results:Result[];messages:{source:string;name:string;message:string}[]};
 const names:Record<string,string> = {picnic:"Picnic",chronodrive:"Chronodrive",openfoodfacts:"Open Food Facts"};
 const money = (cents:number) => new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR"}).format(cents/100);
 
@@ -21,19 +21,20 @@ async function post<T>(path:string, data:unknown):Promise<T> {
   return response.json();
 }
 
-export default function ProductSearch({ean,label,matches,unresolved,pending,onChange,fullPage=false,initialQuery=""}:{ean:string;label:string;matches:Record<string,string|null>;unresolved:boolean;pending:boolean;onChange:()=>Promise<void>;fullPage?:boolean;initialQuery?:string}) {
+export default function ProductSearch({ean,label,matches,unresolved,pending,onChange,lookupKey="",fullPage=false,initialQuery="",initialData=null}:{ean:string;label:string;matches:Record<string,string|null>;unresolved:boolean;pending:boolean;onChange:()=>Promise<void>;lookupKey?:string;fullPage?:boolean;initialQuery?:string;initialData?:Search|null}) {
   const [activated,setActivated] = useState(fullPage);
   const [refreshing,setRefreshing] = useState(false);
   const [query,setQuery] = useState(initialQuery);
   const [open,setOpen] = useState(fullPage);
   const [searching,setSearching] = useState(false);
-  const [data,setData] = useState<Search|null>(null);
+  const [data,setData] = useState<Search|null>(initialData);
   const [error,setError] = useState("");
   const [choosing,setChoosing] = useState("");
   const latest = useRef("");
   const last = useRef("");
   const request = useRef(false);
   const field = useRef<HTMLInputElement>(null);
+  const loadedSuggestions = useRef<string|null>(null);
   latest.current = query.trim();
 
   async function search(value:string) {
@@ -52,6 +53,19 @@ export default function ProductSearch({ean,label,matches,unresolved,pending,onCh
     const timer=setTimeout(()=>void search(query.trim()),1000);
     return ()=>clearTimeout(timer);
   },[query,open,searching,choosing]);
+
+  useEffect(()=>{
+    if(fullPage || pending || refreshing || !lookupKey || loadedSuggestions.current===lookupKey)return;
+    let active=true;
+    void fetch(`/api/v1/items/${ean}/equivalents`,{cache:"no-store"}).then(async response=>{
+      if(!response.ok)return;
+      const found:Search=await response.json();
+      if(!active)return;
+      loadedSuggestions.current=lookupKey;
+      if(found.results.length){setData(found);setOpen(true);}
+    }).catch(()=>{});
+    return ()=>{active=false;};
+  },[ean,lookupKey,pending,refreshing,fullPage]);
 
   async function choose(offer:Offer) {
     setChoosing(`${offer.source}/${offer.id}`);setError("");
@@ -74,7 +88,7 @@ export default function ProductSearch({ean,label,matches,unresolved,pending,onCh
     setRefreshing(true);setError("");setOpen(false);
     try {
       const found=await post<Search>(`items/${ean}/refresh`,{});
-      setData(found);setOpen(true);
+      setData(found);setOpen(found.results.some(row=>row.offers.some(offer=>offer.source!=="openfoodfacts")));
       await onChange();
     } catch(e) {setError((e as Error).message);}
     finally {setRefreshing(false);}
@@ -96,10 +110,8 @@ export default function ProductSearch({ean,label,matches,unresolved,pending,onCh
         <strong>{result.name}</strong>{result.brand && <span className="result-brand">{result.brand}</span>}{result.size && <span className="result-size">{result.size}</span>}
         <div className="result-offers">{result.offers.map(offer=>{
           const selected=offer.source!=="openfoodfacts" && matches[offer.source]===offer.id;
-          const hasCode=offer.source==="openfoodfacts" || !!offer.eans?.length;
-          return <button key={`${offer.source}/${offer.id}`} type="button" className={`offer-choice${selected?" selected":""}`} disabled={!!choosing || refreshing || !hasCode || selected || (offer.source!=="openfoodfacts" && !!matches[offer.source])} onClick={()=>void choose(offer)} aria-label={`Choisir ${offer.name} — ${names[offer.source]}`}>
+          return <button key={`${offer.source}/${offer.id}`} type="button" className={`offer-choice${selected?" selected":""}`} disabled={!!choosing || refreshing || selected || (offer.source!=="openfoodfacts" && !!matches[offer.source])} onClick={()=>void choose(offer)} aria-label={`Choisir ${offer.name} — ${names[offer.source]}`}>
             <ShopBadge source={offer.source}/><span className="offer-price">{offer.price_cents!=null?money(offer.price_cents):offer.source==="openfoodfacts"?"Choisir ce produit":"Prix indisponible"}</span>
-            {!hasCode && <small>Code-barres indisponible</small>}
             {offer.unit_price_cents!=null && <small>{money(offer.unit_price_cents)} / {offer.unit_price_unit}</small>}
             {offer.size!==result.size && offer.size && <small>{offer.size}</small>}
             {offer.name!==result.name && <small>{offer.name}</small>}
@@ -107,10 +119,10 @@ export default function ProductSearch({ean,label,matches,unresolved,pending,onCh
           </button>;
         })}</div>
       </li>)}</ul>}
-      {!fullPage && !!data?.results.length && <p><a href={`/search?ean=${encodeURIComponent(ean)}&q=${encodeURIComponent(query || label)}`} target="_blank" rel="noopener noreferrer">Voir tous les résultats dans une nouvelle fenêtre ({data.results.length}) ↗</a></p>}
+      {!fullPage && !!data?.results.length && <p><a href={query ? `/search?ean=${encodeURIComponent(ean)}&q=${encodeURIComponent(query)}` : `/search?ean=${encodeURIComponent(ean)}&saved=1`} target="_blank" rel="noopener noreferrer">Voir tous les résultats dans une nouvelle fenêtre ({data.results.length}) ↗</a></p>}
       {data && !data.results.length && <p>Aucun produit trouvé. Essayez un autre nom ou une marque.</p>}
       {data?.messages.map(message=><p className="search-feedback" key={message.source}><ShopBadge source={message.source}/> {message.message}</p>)}
-      <p className="search-help">Choisir un résultat remplace ce produit et son code-barres. La quantité à acheter est conservée.</p>
+      <p className="search-help">Choisissez l’équivalent et son format. La quantité à acheter est conservée ; le code-barres est remplacé si le magasin le fournit.</p>
     </div>}
   </div>;
 }

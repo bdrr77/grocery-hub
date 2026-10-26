@@ -124,13 +124,15 @@ def list_items() -> list[dict]:
         facts = {row["ean"]:row["data"] for row in connection.execute(select(product_facts)).mappings()}
         matches = list(connection.execute(select(targets).where(targets.c.quantity > 0, targets.c.product_id.is_not(None))).mappings())
         for item in result:
-            brand = facts.get(item["ean"], {}).get("brand", "")
+            brand = facts.get(item["ean"], {}).get("brand", "") if item["source"] not in STORES else ""
             if not brand:
                 for match in matches:
-                    if match["ean"] == item["ean"]:
+                    if match["ean"] == item["ean"] and (item["source"] not in STORES or match["store"] == item["source"]):
                         product = next((p for p in match["candidates"] if p["id"] == match["product_id"]), {})
                         brand = product.get("brand", "")
                         if brand:
                             break
+            if not brand:
+                brand = facts.get(item["ean"], {}).get("brand", "")
             item["brand"] = brand or None
         return result

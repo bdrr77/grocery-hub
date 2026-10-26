@@ -10,6 +10,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     (route === "items/named" && request.method === "POST") ||
     (/^items\/[A-Za-z0-9_-]{8,32}\/(search|identity|refresh|select)$/.test(route) && request.method === "POST") ||
     (/^items\/[A-Za-z0-9_-]{8,32}\/search-suggestions$/.test(route) && request.method === "GET") ||
+    (/^items\/[A-Za-z0-9_-]{8,32}\/equivalents$/.test(route) && request.method === "GET") ||
     (/^integrations\/(picnic|chronodrive)\/(connect|sync|search|match|refresh)$/.test(route) && request.method === "POST") ||
     (/^integrations\/picnic\/(send-code|verify-code)$/.test(route) && request.method === "POST") ||
     (/^items\/[A-Za-z0-9_-]{8,32}$/.test(route) && ["DELETE", "PATCH"].includes(request.method));

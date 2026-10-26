@@ -174,7 +174,7 @@ class CatalogTests(unittest.TestCase):
         with patch("app.catalog.product_details",side_effect=facts),patch("app.integration_service.adapter_for",return_value=store):
             result=self.client.post("/api/v1/items/3017620422003/refresh",json={})
         self.assertEqual(result.status_code,200)
-        self.assertEqual(calls,[("ean","3017620422003"),("off","3017620422003"),("search","Barilla Lasagne 500 g")])
+        self.assertEqual(calls,[("ean","3017620422003"),("off","3017620422003"),("search","Barilla Lasagne 500 g"),("search","Lasagne 500 g"),("search","Lasagne")])
 
     def test_deletion_invalidates_snapshot_and_tracks_removal_until_confirmed(self):
         from app.integration_service import public_status
@@ -209,6 +209,94 @@ class CatalogTests(unittest.TestCase):
         with engine.begin() as connection:
             connection.execute(update(targets).where(targets.c.store=="picnic").values(product_id="p1",candidates=[{"id":"p1","brand":"Ferrero"}]))
         self.assertEqual(self.client.get("/api/v1/items").json()[0]["brand"],"Ferrero")
+
+    def test_new_ean_automatically_searches_off_equivalents_without_refresh(self):
+        test_api.ShoppingListTests.configured_store(self)
+        self.add(barcode="3256224060963")
+        store=test_api.FakeStore()
+        store.matches=[]
+        queries=[]
+        async def search(query):
+            queries.append(query)
+            return [test_api.Product("p2","Equivalent",[],250,"500 g")]
+        store.search=search
+        details={"name":"Produit U","brand":"U","description":"Produit comparable","size":"500 g"}
+        with patch("app.matching.product_details",return_value=details),patch("app.integration_service.adapter_for",return_value=store):
+            asyncio.run(operate("picnic"))
+        self.assertEqual(queries,["Produit U 500 g"])
+        result=self.client.get("/api/v1/items/3256224060963/equivalents")
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(result.json()["results"][0]["offers"][0]["id"],"p2")
+        self.assertNotIn("p2",store.cart)
+        selected=self.client.post("/api/v1/items/3256224060963/select",json={"source":"picnic","product_id":"p2"})
+        self.assertEqual(selected.status_code,200)
+        self.assertEqual(selected.json()[0]["label"],"Equivalent")
+        self.assertEqual(selected.json()[0]["ean"],"3256224060963")
+
+    def test_no_off_product_stops_automatic_fallback(self):
+        test_api.ShoppingListTests.configured_store(self)
+        self.add()
+        store=test_api.FakeStore()
+        store.matches=[]
+        store.search=AsyncMock()
+        with patch("app.matching.product_details",return_value=None),patch("app.integration_service.adapter_for",return_value=store):
+            asyncio.run(operate("picnic"))
+        store.search.assert_not_awaited()
+        self.assertEqual(self.client.get("/api/v1/items/3017620422003/equivalents").json()["results"],[])
+
+    def test_equivalent_search_relaxes_a_retailer_brand_to_generic_description(self):
+        from app.matching import search_equivalents
+        store=test_api.FakeStore()
+        calls=[]
+        async def search(query):
+            calls.append(query)
+            return [] if len(calls)==1 else store.matches
+        store.search=search
+        products=asyncio.run(search_equivalents(store,{"name":"Produit U","brand":"U","description":"Comte AOP","size":"200 g"}))
+        self.assertEqual(calls,["Produit U 200 g","Comte AOP 200 g"])
+        self.assertEqual(len(products),1)
+
+    def test_tissue_barcode_uses_universal_product_lookup_and_unbranded_query(self):
+        from app.products import product_details
+        from app.matching import equivalent_queries
+        with patch("app.products.urlopen") as request:
+            request.return_value.__enter__.return_value.read.return_value=json.dumps({"product":{"product_name":"U douceur 110 mouchoirs blanc","brands":"U","quantity":"110"}}).encode()
+            details=product_details("3256224060963")
+        self.assertIn("product_type=all",request.call_args.args[0].full_url)
+        self.assertEqual(equivalent_queries(details)[-1],"mouchoirs")
+
+    def test_second_shop_can_have_a_different_equivalent_without_losing_first(self):
+        self.add(barcode="3256224060963")
+        first={"id":"p2","name":"Tissues A","brand":"Brand A","eans":[],"size":"100 pieces","price_cents":200}
+        second={"id":"c2","name":"Tissues B","brand":"Brand B","eans":["12345678"],"size":"100 pieces","price_cents":210}
+        with engine.begin() as connection:
+            connection.execute(update(targets).where(targets.c.store=="picnic").values(candidates=[first]))
+            connection.execute(update(targets).where(targets.c.store=="chronodrive").values(candidates=[second]))
+            connection.execute(product_facts.insert().values(ean="3256224060963",data={"brand":"U"},fetched_at=time.time()))
+        self.assertEqual(self.client.post("/api/v1/items/3256224060963/select",json={"source":"picnic","product_id":"p2"}).status_code,200)
+        result=self.client.post("/api/v1/items/3256224060963/select",json={"source":"chronodrive","product_id":"c2"})
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(result.json()[0]["label"],"Tissues A")
+        self.assertEqual(result.json()[0]["brand"],"Brand A")
+        with engine.connect() as connection:
+            jobs=connection.execute(select(targets)).mappings().all()
+        self.assertEqual({job["product_id"] for job in jobs},{"p2","c2"})
+
+    def test_refresh_without_off_metadata_stops_and_clears_old_candidates(self):
+        test_api.ShoppingListTests.configured_store(self)
+        self.add()
+        store=test_api.FakeStore()
+        store.matches=[]
+        with patch("app.integration_service.adapter_for",return_value=store):
+            asyncio.run(operate("picnic"))
+        with engine.begin() as connection:
+            connection.execute(update(targets).where(targets.c.store=="picnic").values(candidates=[{"id":"old","name":"Old","eans":[]}]))
+        store.search=AsyncMock()
+        with patch("app.catalog.product_details",return_value=None),patch("app.integration_service.adapter_for",return_value=store):
+            response=self.client.post("/api/v1/items/3017620422003/refresh",json={})
+        self.assertEqual(response.json()["results"],[])
+        store.search.assert_not_awaited()
+        self.assertEqual(self.client.get("/api/v1/items/3017620422003/equivalents").json()["results"],[])
 
 
 def tearDownModule():

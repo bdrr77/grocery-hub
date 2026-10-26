@@ -5,10 +5,11 @@ import time
 from sqlalchemy import select, update, delete
 
 from .connectors.base import ConnectorError
-from .database import engine, insert_for, items, item_details, product_facts, targets, enqueue, integrations
+from .database import engine, insert_for, items, item_details, product_facts, targets, enqueue, integrations, cart_snapshots
 from .integration_service import operate, public_status
 from .pricing import pack_pricing
 from .products import product_search, product_details
+from .matching import equivalent_queries
 
 
 def group_results(sources):
@@ -110,11 +111,17 @@ def choose_store_product(ean, source, product_id):
         if connection.execute(select(targets.c.ean).where(targets.c.store == source,targets.c.product_id == product_id,targets.c.ean != ean)).first():
             raise ConnectorError("invalid_match", "Ce produit magasin est déjà associé à un autre article.")
         codes = list(dict.fromkeys(code for code in product.get("eans", []) if code.isdigit()))
-        code = ean if ean in codes else codes[0] if len(codes) == 1 else None
+        code = ean if not codes or ean in codes else codes[0] if len(codes) == 1 else None
         if not code:
             raise ConnectorError("invalid_match", "Ce magasin ne fournit pas de code-barres vérifiable pour ce résultat.")
-        replace_identity(connection, ean, code, product, source, product_id)
-        connection.execute(update(targets).where(targets.c.ean == code,targets.c.store == source).values(product_id=product_id,product_name=product["name"],price_cents=product.get("price_cents"),candidates=[product]))
+        other_match = connection.execute(select(targets.c.ean).where(targets.c.ean == ean,targets.c.store != source,targets.c.quantity > 0,targets.c.product_id.is_not(None))).first()
+        if other_match:
+            # The other shop can carry a different equivalent. Preserve its association.
+            code = ean
+            connection.execute(delete(cart_snapshots).where(cart_snapshots.c.store == source))
+        else:
+            replace_identity(connection, ean, code, product, source, product_id)
+        connection.execute(update(targets).where(targets.c.ean == code,targets.c.store == source).values(product_id=product_id,product_name=product["name"],price_cents=product.get("price_cents"),candidates=[product],status="queued",retry_at=0,revision=targets.c.revision+1))
 
 
 async def refresh_product(ean):
@@ -152,16 +159,23 @@ async def refresh_product(ean):
         job = next((j for j in current["items"] if j["ean"] == ean),None)
         if not job or job["product_id"]:
             return
-        name = details["name"]
-        brand = details.get("brand", "").split(",")[0].strip()
-        if brand and brand.casefold() not in name.casefold():
-            name = brand + " " + name
-        size = details.get("size", "")
-        query = (name if not size or size.casefold() in name.casefold() else name + " " + size)[:200]
         try:
-            products = await operate(store["id"],"search",ean=ean,query=query)
+            products = []
+            for query in equivalent_queries(details):
+                products = await operate(store["id"],"search",ean=ean,query=query)
+                if products:
+                    break
             sources.append((store["id"],products))
         except ConnectorError:
             messages.append({"source":store["id"],"name":store["name"],"message":"Recherche du magasin indisponible. Relancez la recherche."})
     await asyncio.gather(*(search_from_facts(store) for store in stores))
     return {"results":group_results(sources),"messages":messages}
+
+
+def cached_equivalents(ean):
+    with engine.connect() as connection:
+        if not connection.execute(select(items.c.ean).where(items.c.ean == ean)).first():
+            raise ConnectorError("not_found", "Cet article n’est plus dans la liste.")
+        jobs = list(connection.execute(select(targets).where(targets.c.ean == ean,targets.c.quantity > 0)).mappings())
+    sources = [(job["store"],job["candidates"]) for job in jobs if not job["product_id"] and job["status"] == "unmatched" and job["candidates"]]
+    return {"results":group_results(sources),"messages":[]}
