@@ -49,6 +49,13 @@ targets = Table(
     Column("message", String(500), nullable=False, default="En attente de synchronisation."),
     Column("retry_at", Float, nullable=False, default=0),
 )
+cart_snapshots = Table(
+    "store_cart_snapshots", metadata,
+    Column("store", String(32), primary_key=True),
+    Column("fingerprint", String(64), nullable=False),
+    Column("fetched_at", Float, nullable=False),
+    Column("data", JSON, nullable=False),
+)
 
 
 def insert_for(table):

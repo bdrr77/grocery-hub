@@ -105,6 +105,11 @@ errors, with per-item sync results. Bring integration and order detection remain
 These store APIs are unofficial; account-specific login and catalog behavior must be
 verified against your accounts after deployment. See [connector setup](docs/connectors.md).
 
+The dashboard accepts names or barcodes, supports quantity controls, and compares
+associated list amounts separately from the stores' reported cart totals. Missing
+matches, stale prices, fees, deposits and unrelated cart items remain visible. Picnic
+uses a maintained Node client bundled inside the Python API/worker images.
+
 The browser uses same-origin API routes through Next.js. Docker Compose sets the
 server-only `API_INTERNAL_URL` at runtime; a public API build-time URL is unnecessary.
 See [deployment instructions](docs/deployment.md) to rebuild and deploy the changes.

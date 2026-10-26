@@ -75,6 +75,40 @@ class ShoppingListTests(unittest.TestCase):
         self.assertEqual(self.add(barcode="123").status_code, 422)
         self.assertEqual(self.client.delete("/api/v1/items/3017620422003").status_code, 404)
 
+    def test_named_item_retry_and_quantity_controls_queue_changes(self):
+        payload = {"label":"Pâtes", "event_id":"named-event-1"}
+        first = self.client.post("/api/v1/items/named",json=payload)
+        self.assertEqual(first.status_code,200)
+        key = first.json()[0]["ean"]
+        self.assertTrue(key.startswith("n"))
+        self.client.post("/api/v1/items/named",json=payload)
+        self.assertEqual(len(self.client.get("/api/v1/items").json()),1)
+        changed = self.client.patch(f"/api/v1/items/{key}",json={"quantity":3})
+        self.assertEqual(changed.json()[0]["quantity"],3)
+        self.assertEqual(self.rows()[0]["quantity"],3)
+        self.assertEqual(self.client.patch(f"/api/v1/items/{key}",json={"quantity":0}).status_code,422)
+        self.assertEqual(self.client.delete(f"/api/v1/items/{key}").status_code,204)
+        self.assertEqual(self.rows()[0]["quantity"],0)
+
+    def test_snapshot_exposes_native_total_separately_from_associated_list(self):
+        self.configured_store()
+        self.add()
+        with patch("app.integration_service.adapter_for",return_value=FakeStore()):
+            asyncio.run(operate("picnic"))
+        pricing = public_status()[0]["pricing"]
+        self.assertEqual(pricing["list_total_cents"],399)
+        self.assertEqual(pricing["cart_total_cents"],1995)
+        self.assertEqual(pricing["other_cart_items"],1)
+
+    def test_named_item_requires_selection_even_when_store_can_match_eans(self):
+        self.configured_store()
+        self.client.post("/api/v1/items/named",json={"label":"Pâtes","event_id":"named-event-2"})
+        store = FakeStore()
+        with patch("app.integration_service.adapter_for",return_value=store):
+            asyncio.run(operate("picnic"))
+        self.assertEqual(self.rows()[0]["status"],"unmatched")
+        self.assertNotIn("p1",store.cart)
+
     def test_connections_require_configuration(self):
         statuses = self.client.get("/api/v1/integrations").json()
         self.assertEqual({store["id"] for store in statuses}, {"picnic", "chronodrive"})
@@ -179,6 +213,18 @@ class ShoppingListTests(unittest.TestCase):
             connection.execute(update(integrations).where(integrations.c.store == "picnic").values(checked_at=1))
         self.assertEqual(public_status()[0]["status"], "stale")
 
+    def test_catalog_failure_does_not_disconnect_healthy_account(self):
+        self.configured_store()
+        self.add()
+        store = FakeStore()
+        async def fail_search(query):
+            raise ConnectorError("search_error", "Catalogue indisponible.")
+        store.search = fail_search
+        with patch("app.integration_service.adapter_for", return_value=store):
+            response = self.client.post("/api/v1/integrations/picnic/search", json={"ean":"3017620422003","query":"Nutella"})
+        self.assertEqual(response.status_code,400)
+        self.assertTrue(public_status()[0]["connected"])
+
     def test_unknown_store_and_otp_input_validation(self):
         self.assertEqual(self.client.post("/api/v1/integrations/unknown/connect").status_code, 404)
         self.assertEqual(self.client.post("/api/v1/integrations/picnic/verify-code", json={"code":"invalid"}).status_code, 422)
@@ -186,16 +232,18 @@ class ShoppingListTests(unittest.TestCase):
     def test_sms_session_survives_api_requests_and_bad_code_can_be_retried(self):
         self.configured_store()
         calls = []
-        def handle(request):
-            calls.append(request.url.path)
-            if request.url.path.endswith("/user/login"):
-                return httpx.Response(200, json={"second_factor_authentication_required":True}, headers={"x-picnic-auth":"private-provisional"})
-            if request.url.path.endswith("/2fa/verify"):
-                if json.loads(request.content)["otp"] == "000000":
-                    return httpx.Response(400, text="private-error-body")
-                return httpx.Response(204, headers={"x-picnic-auth":"private-verified"})
-            return httpx.Response(200, json={})
-        with patch("app.integration_service.adapter_for", side_effect=lambda store, session:PicnicAdapter(settings, session, httpx.MockTransport(handle))):
+        async def run(adapter, action, **values):
+            calls.append(action)
+            if action == "login":
+                adapter.session.update(token="private-provisional",otp_required=True)
+            elif action == "verify-code":
+                if values["code"] == "000000":
+                    raise ConnectorError("upstream_error","Code refus?.")
+                adapter.session.update(token="private-verified",otp_required=False)
+            elif action == "cart":
+                return {"lines":[],"total_cents":0,"currency":"EUR"}
+            return None
+        with patch("app.connectors.picnic.PicnicAdapter._run",new=run):
             self.assertEqual(self.client.post("/api/v1/integrations/picnic/connect").status_code, 400)
             self.assertEqual(self.client.post("/api/v1/integrations/picnic/send-code").status_code, 200)
             invalid = self.client.post("/api/v1/integrations/picnic/verify-code", json={"code":"000000"})
@@ -204,7 +252,7 @@ class ShoppingListTests(unittest.TestCase):
             self.assertEqual(public_status()[0]["status"], "otp_required")
             self.assertEqual(self.client.post("/api/v1/integrations/picnic/verify-code", json={"code":"123456"}).status_code, 200)
             asyncio.run(operate("picnic"))
-        self.assertEqual(sum(path.endswith("/user/login") for path in calls), 1)
+        self.assertEqual(calls.count("login"), 1)
         self.assertTrue(public_status()[0]["connected"])
         self.assertNotIn("private", str(public_status()))
 
@@ -244,6 +292,10 @@ class FakeStore:
             self.cart[product_id] = quantity
         else:
             self.cart.pop(product_id, None)
+
+    async def get_cart_details(self):
+        return {"lines":[{"id":key,"quantity":quantity,"line_total_cents":quantity*399,"name":key,"size":"400 g"} for key,quantity in self.cart.items()],
+                "total_cents":sum(self.cart.values())*399,"currency":"EUR","deposit_cents":0,"fees_cents":0,"discount_cents":0}
 
 
 def tearDownModule():

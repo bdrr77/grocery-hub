@@ -22,10 +22,11 @@ class ChronodriveAdapter(StoreAdapter):
         response = await self.request("GET", WEB)
         text = response.text.replace('\\"', '"')
         config = {}
-        for field, key in {"client_id": "CLIENT_ID", "customers": "CHR_API_CUSTOMERS_APIKEY", "products": "CHR_API_PRODUCTS_APIKEY", "carts": "CHR_API_CARTS_APIKEY"}.items():
-            match = re.search(r'\b' + key + r'''["':\s]+([A-Za-z0-9_-]+)''', text)
+        keys = {"client_id": ("API_AUTH_CLIENT_ID", "CLIENT_ID"), "customers": ("CHR_API_CUSTOMERS_APIKEY",), "products": ("CHR_API_PRODUCTS_APIKEY",), "carts": ("CHR_API_CARTS_APIKEY",)}
+        for field, aliases in keys.items():
+            match = next((match for key in aliases if (match := re.search(r'\b' + key + r'''["':\s]+([A-Za-z0-9_-]+)''', text))), None)
             if not match:
-                raise ConnectorError("protocol_error", "Configuration publique Chronodrive introuvable. Le site a peut-être changé.")
+                raise ConnectorError("protocol_error", f"Configuration publique Chronodrive introuvable ({field}). Le site a peut-être changé.")
             config[field] = match[1]
         self.session["config"] = config
         return config
@@ -119,12 +120,26 @@ class ChronodriveAdapter(StoreAdapter):
             raise ConnectorError("no_cart", "Ouvrez Chronodrive, sélectionnez votre magasin et créez un panier actif, puis reconnectez.")
         self.session["cart_id"] = str(active[0]["id"])
         cart = {}
+        lines = []
         for line in active[0].get("items", []):
             product_id = str((line.get("product") or {}).get("id", ""))
             if not product_id or not isinstance(line.get("quantity"), int):
                 raise ConnectorError("protocol_error", "Ligne de panier Chronodrive non reconnue.")
             cart[product_id] = line["quantity"]
+            product = line["product"]
+            labels = product.get("labels") or {}
+            lines.append({"id":product_id,"name":labels.get("productLabel") or product.get("name", ""),
+                          "quantity":line["quantity"],"size":labels.get("unitQuantityLabel", ""),
+                          "line_total_cents":cents((product.get("prices") or {}).get("totalAmount"))})
+        amounts = active[0].get("amounts") or {}
+        self.last_cart = {"lines":lines,"currency":"EUR", "total_cents":cents(amounts.get("totalOrderAmount")),
+                          "deposit_cents":cents(amounts.get("totalDepositAmount")), "fees_cents":cents(amounts.get("totalAdditionalCostsAmount")),
+                          "discount_cents":cents(amounts.get("totalDiscountAmount"))}
         return cart
+
+    async def get_cart_details(self):
+        await self.get_cart()
+        return self.last_cart
 
     async def set_quantity(self, product_id, quantity):
         current = (await self.get_cart()).get(product_id, 0)

@@ -10,7 +10,8 @@ from .config import settings
 from .connectors.base import ConnectorError
 from .connectors.chronodrive import ChronodriveAdapter
 from .connectors.picnic import PicnicAdapter
-from .database import STORES, engine, insert_for, integrations, items, targets
+from .database import STORES, cart_snapshots, engine, insert_for, integrations, items, targets
+from .pricing import summarize
 
 NAMES = {"picnic": "Picnic", "chronodrive": "Chronodrive"}
 
@@ -40,6 +41,7 @@ def public_status():
     with engine.connect() as connection:
         states = {row["store"]: dict(row) for row in connection.execute(select(integrations)).mappings()}
         jobs = [dict(row) for row in connection.execute(select(targets).where(targets.c.quantity > 0)).mappings()]
+        snapshots = {row["store"]: dict(row) for row in connection.execute(select(cart_snapshots)).mappings()}
     result = []
     for store in STORES:
         configured, fingerprint, setup_message = configuration(store)
@@ -56,6 +58,7 @@ def public_status():
             "id": store, "name": NAMES[store], "status": state, "connected": state == "connected",
             "message": message, "configured": configured, "checked_at": checked or None,
             "items": [{key: job[key] for key in ("ean", "quantity", "status", "message", "product_id", "product_name", "price_cents")} for job in jobs if job["store"] == store],
+            "pricing":summarize(snapshots.get(store), [job for job in jobs if job["store"] == store], fingerprint, state == "connected", now),
         })
     return result
 
@@ -130,6 +133,11 @@ async def operate(store, action="sync", *, ean=None, query=None, product_id=None
                 connection.execute(update(targets).where(targets.c.store == store, targets.c.ean == ean).values(product_id=product_id, product_name=product["name"], price_cents=product["price_cents"], status="queued", retry_at=0, revision=targets.c.revision + 1))
         elif action == "sync":
             await sync_targets(store, adapter, owner)
+        if action in {"sync", "connect", "verify-code", "refresh"}:
+            snapshot = await adapter.get_cart_details()
+            with engine.begin() as connection:
+                entry = insert_for(cart_snapshots).values(store=store, fingerprint=fingerprint, fetched_at=time.time(), data=snapshot)
+                connection.execute(entry.on_conflict_do_update(index_elements=[cart_snapshots.c.store], set_={"fingerprint":fingerprint,"fetched_at":time.time(),"data":snapshot}))
         save_state(store, owner, status="connected", message="Compte connecté. Synchronisation des articles associés active.", checked_at=time.time(), retry_at=0, fingerprint=fingerprint, session=adapter.session)
         return result
     except ConnectorError as error:
@@ -138,7 +146,7 @@ async def operate(store, action="sync", *, ean=None, query=None, product_id=None
         if action in {"verify-code", "send-code"} and adapter and adapter.session.get("otp_required") and adapter.session.get("token"):
             message = "Code non validé. Vérifiez le code reçu et réessayez." if action == "verify-code" else "Impossible de demander un code. Réessayez plus tard."
             save_state(store, owner, status="otp_required", message=message, checked_at=time.time(), retry_at=time.time() + 86400, fingerprint=fingerprint, session=adapter.session)
-        elif error.status in {"invalid_match", "not_found"}:
+        elif error.status in {"invalid_match", "not_found", "search_error"}:
             save_state(store, owner, status="connected", message="Compte connecté.", checked_at=time.time(), retry_at=0, fingerprint=fingerprint, session=adapter.session if adapter else {})
         else:
             save_state(store, owner, status=error.status, message=error.message, checked_at=time.time(), retry_at=time.time() + (86400 if error.status in {"otp_required", "auth_error", "access_denied"} else 300), fingerprint=fingerprint, session=adapter.session if adapter else {})
@@ -164,6 +172,8 @@ async def sync_targets(store, adapter, owner):
         condition = (targets.c.store == store, targets.c.ean == job["ean"], targets.c.revision == job["revision"])
         try:
             if not job["product_id"] and job["quantity"] > 0:
+                if not job["ean"].isdigit():
+                    raise ConnectorError("unmatched", "Choisissez le produit et le format souhaités pour cet article.")
                 matches = await adapter.search_by_ean(job["ean"])
                 if len(matches) != 1:
                     raise ConnectorError("unmatched", "Aucun produit unique confirmé par EAN. Recherchez et choisissez un produit.")

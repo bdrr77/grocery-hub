@@ -7,9 +7,10 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const route = path.join("/");
   const allowed = (route === "items" && ["GET", "POST"].includes(request.method)) ||
     (route === "integrations" && request.method === "GET") ||
-    (/^integrations\/(picnic|chronodrive)\/(connect|sync|search|match)$/.test(route) && request.method === "POST") ||
+    (route === "items/named" && request.method === "POST") ||
+    (/^integrations\/(picnic|chronodrive)\/(connect|sync|search|match|refresh)$/.test(route) && request.method === "POST") ||
     (/^integrations\/picnic\/(send-code|verify-code)$/.test(route) && request.method === "POST") ||
-    (/^items\/[0-9]{8,32}$/.test(route) && request.method === "DELETE");
+    (/^items\/[A-Za-z0-9_-]{8,32}$/.test(route) && ["DELETE", "PATCH"].includes(request.method));
   if (!allowed) return NextResponse.json({ detail: "Not found" }, { status: 404 });
   const origin = request.headers.get("origin");
   if (request.method !== "GET" && origin && new URL(origin).host !== request.headers.get("host")) {
@@ -20,7 +21,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     const response = await fetch(`${base.replace(/\/$/, "")}/api/v1/${route}`, {
       method: request.method,
       headers: { "Content-Type": "application/json" },
-      body: request.method === "POST" ? await request.text() : undefined,
+      body: ["POST", "PATCH"].includes(request.method) ? await request.text() : undefined,
       cache: "no-store",
       signal: AbortSignal.timeout(route.startsWith("integrations/") ? 90000 : 15000),
     });
@@ -33,4 +34,4 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   }
 }
 
-export { proxy as GET, proxy as POST, proxy as DELETE };
+export { proxy as GET, proxy as POST, proxy as DELETE, proxy as PATCH };

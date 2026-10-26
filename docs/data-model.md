@@ -10,12 +10,18 @@ Implemented tables (created on API startup):
   leased operation lock and private session JSON. Session tokens remain server-side.
 - `store_sync_targets`: store + EAN primary key, desired quantity, revision, confirmed
   product association, candidate products, observed price and per-item sync result.
+- `store_cart_snapshots`: normalized store lines and reported amounts, account/store
+  fingerprint and fetch time. It never contains raw customer or payment data.
 
 The app supports one shared household list. Item changes and sync targets commit in
 one transaction. Targets coalesce changes into the latest desired quantity; removal
 retains a zero-quantity target until the associated store line has been removed.
 Workers read the remote quantity before applying a delta, then verify the result.
 Revision checks prevent completion of an older operation from erasing a newer change.
+
+Named items use a deterministic `n`-prefixed internal identifier in the existing item
+key column. Barcode scans remain numeric and their schema/transport is unchanged.
+Only new tables are created for snapshots; existing item tables do not need altering.
 
 Planned tables:
 - `shopping_lists`

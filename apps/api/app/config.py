@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     picnic_country_code: str = "FR"
     picnic_api_version: str = "15"
     picnic_device_id: str = "grocery-hub"
-    picnic_agent: str = "30100;1.246.1-15599;"
+    picnic_agent: str = "30100;1.251.0-15611;"
     chronodrive_username: str = ""
     chronodrive_email: str = ""
     chronodrive_password: str = Field(default="", repr=False)

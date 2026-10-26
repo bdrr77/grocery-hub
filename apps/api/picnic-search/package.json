@@ -1,0 +1,5 @@
+{
+  "name": "grocery-picnic-search",
+  "private": true,
+  "dependencies": { "picnic-api": "5.3.0" }
+}

@@ -4,6 +4,11 @@ Grocery Hub synchronizes the latest desired quantity of each associated shopping
 item to store carts. It does not place orders, pay, select a delivery slot, clear an
 entire store cart, or remove unrelated store products.
 
+Picnic login, SMS, search, cart reads and cart updates use the pinned `picnic-api`
+Node client. The API and worker images include Node and its locked dependency; no
+additional container, public route or Node installation on the host is needed.
+Chronodrive remains a Python adapter. Both store integrations are unofficial.
+
 ## Configure both server containers
 
 Put these variables in the environment of **both the API and worker**, with identical
@@ -64,10 +69,31 @@ and removals atomically update the per-store desired quantity. The worker polls 
 `CONNECTOR_POLL_SECONDS` (default 30) and handles up to ten pending items per store/pass.
 
 Only one exact EAN match is accepted automatically. A name-only result is never silently
-chosen. Picnic's legacy search often returns no EAN metadata: in that case, use
+chosen. Picnic's modern catalog does not expose verified EAN metadata: use
 **Choisir chez Picnic**, search by product name, check the size and price, and click
 **Associer**. The selected product is saved for subsequent scans. Chronodrive returns
 EANs in its product catalog and can usually resolve these automatically.
+
+You can add a product by name without an EAN and select a product in each store. The
+plus/minus controls update the shared list quantity and queue the associated cart
+updates. Named items use an internal key in the existing `ean` column and are never
+sent to a store as barcodes.
+
+## Price comparison
+
+The worker stores a fresh normalized cart snapshot after each successful sync. Use
+**Actualiser les prix** to read current prices without changing cart quantities.
+**Ma sélection** sums the actual cart line amounts of associated products only when
+all desired quantities are synced and priced. It includes the discounts assigned to
+those lines; the store may calculate promotions using other cart contents.
+
+**Panier du magasin** is the store's reported order/checkout total and can include
+unrelated products, deposits, credits and fees. The comparison panel shows coverage,
+other cart lines, reported fees/deposits and the last snapshot time. Missing totals
+remain unknown; snapshots older than five minutes or from a disconnected/different
+account are not presented as current prices. No price difference is displayed while
+either list is incomplete. Compare the selected pack sizes before interpreting an
+amount difference as savings on equivalent products.
 
 Two EANs cannot target the same store product. To change an existing association, remove
 the item, wait for its removal to synchronize, then add it again and select a new match.
@@ -99,6 +125,6 @@ Protocol sources used for implementation:
 
 - [Picnic login and SMS verification](https://github.com/MRVDH/picnic-api/blob/main/src/domains/auth/service.ts)
 - [Picnic cart protocol](https://github.com/MRVDH/picnic-api/blob/main/src/domains/cart/service.ts)
-- [Picnic legacy search protocol](https://github.com/MikeBrink/python-picnic-api/blob/master/python_picnic_api/client.py)
+- [Maintained Picnic client](https://github.com/MRVDH/picnic-api)
 - [Chronodrive OAuth and public frontend config](https://github.com/y-vex/chronodrive-mcp/blob/main/client.py)
 - [Chronodrive product/cart contract](https://github.com/machintrucbidule/cOURSesDrive/blob/main/docs/api-chronodrive-contract.md)

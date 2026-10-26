@@ -11,7 +11,37 @@ permissions:
   packages: write
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: grocery_test
+          POSTGRES_USER: grocery_test
+          POSTGRES_PASSWORD: grocery_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U grocery_test -d grocery_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: pip install -r apps/api/requirements-dev.txt
+      - run: npm ci --prefix apps/api/picnic-search --ignore-scripts
+      - run: python -m unittest discover -s tests -v
+        working-directory: apps/api
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://grocery_test:grocery_test@localhost:5432/grocery_test
+      - run: node --test apps/api/picnic-search/search.test.mjs evaluations/test_picnic_node.cjs
   build:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:

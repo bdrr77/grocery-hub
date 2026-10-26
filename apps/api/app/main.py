@@ -1,4 +1,5 @@
 import hmac
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 
@@ -10,7 +11,7 @@ from .database import STORES, add_barcode, engine, enqueue, items, list_items, m
 from .connectors.base import ConnectorError
 from .integration_service import initialize, operate, public_status
 from .products import product_label
-from .schemas import HealthResponse, ScanRequest, ScanResponse, ShoppingItemResponse, StoreSearchRequest, StoreMatchRequest, VerificationRequest
+from .schemas import HealthResponse, ScanRequest, ScanResponse, ShoppingItemResponse, StoreSearchRequest, StoreMatchRequest, VerificationRequest, NamedItemRequest, QuantityRequest
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -97,6 +98,26 @@ def remove_item(ean: str):
         enqueue(connection, ean, 0, label)
 
 
+@app.post("/api/v1/items/named", response_model=list[ShoppingItemResponse])
+def create_named_item(payload: NamedItemRequest):
+    label = payload.label.strip()
+    if not label:
+        raise HTTPException(status_code=422, detail="Le nom du produit est vide.")
+    key = "n" + hashlib.sha256(payload.event_id.encode()).hexdigest()[:31]
+    add_barcode(key, payload.event_id, "web-named", label)
+    return list_items()
+
+
+@app.patch("/api/v1/items/{ean}", response_model=list[ShoppingItemResponse])
+def set_item_quantity(ean: str, payload: QuantityRequest):
+    with engine.begin() as connection:
+        row = connection.execute(update(items).where(items.c.ean == ean).values(quantity=payload.quantity).returning(items)).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+        enqueue(connection, ean, row["quantity"], row["label"])
+    return list_items()
+
+
 @app.get("/api/v1/integrations")
 def integrations():
     return public_status()
@@ -128,6 +149,12 @@ def request_sync(store: str):
 @app.post("/api/v1/integrations/{store}/search")
 async def search_store(store: str, payload: StoreSearchRequest):
     return await store_action(store, "search", ean=payload.ean, query=payload.query)
+
+
+@app.post("/api/v1/integrations/{store}/refresh")
+async def refresh_prices(store: str):
+    await store_action(store, "refresh")
+    return public_status()
 
 
 @app.post("/api/v1/integrations/{store}/match", status_code=202)
