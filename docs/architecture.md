@@ -62,7 +62,7 @@ The server owns all business state and integrations:
 
 1. PostgreSQL is authoritative.
 2. A scan is durably queued on the Pi before network delivery.
-3. API writes and outbox events will be committed atomically.
+3. API writes and desired-quantity sync targets commit atomically.
 4. External store synchronization is eventually consistent.
 5. Each adapter retries independently.
 6. A store outage never rolls back the local shopping list.
@@ -88,9 +88,14 @@ Content-Type: application/json
 }
 ```
 
-`event_id` is an idempotency key generated on the Pi. Once persistence is implemented,
-the API must store/enforce uniqueness of that ID so network retries cannot duplicate a
-scan event.
+`event_id` is generated on the Pi. The API enforces uniqueness per device and commits
+the receipt, item mutation and store sync targets together so retries cannot duplicate
+a scan event. The worker polls targets independently for Picnic and Chronodrive.
+
+The API and worker share the connector code in `apps/api/app/connectors`. The worker
+image therefore builds from the repository root, using `apps/worker/Dockerfile`.
+Store operations use a database lease so UI authentication and multiple workers cannot
+mutate the same store concurrently. The UI never receives tokens or passwords.
 
 ## Domain events
 

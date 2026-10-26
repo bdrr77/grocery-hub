@@ -1,0 +1,11 @@
+.git
+.venv
+.pnpm-store
+**/node_modules
+**/.next
+**/__pycache__
+**/.pytest_cache
+**/.env
+**/*.pyc
+**/*.sqlite
+**/*.dump

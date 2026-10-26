@@ -147,9 +147,10 @@ same device/event pair does not increment the quantity twice. A new event for th
 same barcode increments its quantity. Product names are looked up in Open Food
 Facts, with a barcode label used if the product is unknown or lookup fails.
 
-Picnic and Chronodrive currently report `not_implemented`. Their adapters are stubs:
-setting store credentials does not connect an account or synchronize a cart. The UI
-shows this explicitly and does not display sample products or fabricated prices.
+Picnic and Chronodrive support login, product search and background cart synchronization.
+Configure credentials in both API and worker containers, then use the connection cards
+to reconnect or complete Picnic SMS verification. See [connector setup](connectors.md)
+for required settings, matching rules and custom Traefik deployment instructions.
 
 After publishing images containing these changes, update the server checkout (including
 `compose.yml`), select that image version in `.env`, then run `docker compose pull`

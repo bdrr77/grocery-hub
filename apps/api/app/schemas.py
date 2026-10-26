@@ -11,6 +11,20 @@ class ShoppingItemResponse(BaseModel):
     quantity: int
 
 
+class StoreSearchRequest(BaseModel):
+    ean: str = Field(min_length=8, max_length=32, pattern=r"^[0-9]+$")
+    query: str = Field(min_length=1, max_length=200)
+
+
+class StoreMatchRequest(BaseModel):
+    ean: str = Field(min_length=8, max_length=32, pattern=r"^[0-9]+$")
+    product_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class VerificationRequest(BaseModel):
+    code: str = Field(min_length=4, max_length=10, pattern=r"^[0-9]+$")
+
+
 class ScanRequest(BaseModel):
     barcode: str = Field(min_length=8, max_length=32, pattern=r"^[0-9]+$")
     event_id: str = Field(min_length=8, max_length=128)

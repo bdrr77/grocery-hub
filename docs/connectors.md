@@ -1,0 +1,104 @@
+# Picnic and Chronodrive
+
+Grocery Hub synchronizes the latest desired quantity of each associated shopping-list
+item to store carts. It does not place orders, pay, select a delivery slot, clear an
+entire store cart, or remove unrelated store products.
+
+## Configure both server containers
+
+Put these variables in the environment of **both the API and worker**, with identical
+values. The provided production Compose file loads both from the same `.env` file.
+
+```dotenv
+PICNIC_USERNAME=your-account-email
+PICNIC_PASSWORD=your-account-password
+PICNIC_COUNTRY_CODE=FR
+PICNIC_DEVICE_ID=grocery-hub
+
+CHRONODRIVE_EMAIL=your-account-email
+CHRONODRIVE_PASSWORD=your-account-password
+CHRONODRIVE_STORE_ID=your-store-id
+CHRONODRIVE_SITE_MODE=DRIVE
+```
+
+`CHRONODRIVE_USERNAME` is accepted when `CHRONODRIVE_EMAIL` is absent. An empty EMAIL
+does not override a nonempty USERNAME. Keep the Picnic country and device ID stable
+after verification. Changing credentials, country, device or Chronodrive store resets
+the cached session and product associations for that store.
+
+For a custom stack with services `grocery-api` and `grocery-web`, retain:
+
+```yaml
+environment:
+  - API_INTERNAL_URL=http://grocery-api:8000
+```
+
+The web and API must share a Docker network. The **worker also needs outbound HTTPS**
+access to both stores. In the provided production Compose file it joins `frontend`
+as well as the internal `backend` network. Update all three images together: API,
+worker and web. The scanner does not need rebuilding for this change.
+
+Keep the UI behind your existing OAuth middleware. If exposing the API hostname for
+the scanner, restrict that router to `/api/v1/items/scan`; the dashboard's connector
+actions and shopping-list routes go through the authenticated web hostname.
+
+## First connection
+
+1. Recreate the API and worker after setting their environment variables.
+2. Open the dashboard. The worker attempts a connection on its first pass. Use
+   **Reconnecter** to explicitly retry a refused or expired login.
+3. For Picnic, if **Code SMS requis** appears, click **Recevoir un code SMS**, then
+   enter it and click **Vérifier le code**. Polling never sends SMS automatically.
+4. For Chronodrive, select your desired store and initialize a cart on its website
+   first. Grocery Hub will not switch stores or choose an already ordered cart.
+
+Connection status is based on successful authenticated requests, not just credentials
+being present. An old worker heartbeat is shown as stale. Auth failures pause automatic
+attempts; reconnect explicitly after correcting credentials or completing checks on the
+store's site. Transient errors and rate limits back off for five minutes.
+
+## Matching and synchronization
+
+Existing list items are queued when the updated API starts. New scans, repeated scans,
+and removals atomically update the per-store desired quantity. The worker polls every
+`CONNECTOR_POLL_SECONDS` (default 30) and handles up to ten pending items per store/pass.
+
+Only one exact EAN match is accepted automatically. A name-only result is never silently
+chosen. Picnic's legacy search often returns no EAN metadata: in that case, use
+**Choisir chez Picnic**, search by product name, check the size and price, and click
+**Associer**. The selected product is saved for subsequent scans. Chronodrive returns
+EANs in its product catalog and can usually resolve these automatically.
+
+Two EANs cannot target the same store product. To change an existing association, remove
+the item, wait for its removal to synchronize, then add it again and select a new match.
+
+Retries read the current remote quantity, apply the difference and verify it. A store
+timeout never rolls back the local list. Stock limits and partial writes remain visible
+as per-item errors. **Synchroniser** requeues the current list, including unmatched or
+failed items; it does not clear a cart or check out. It can reset quantities of associated
+products that you manually changed in the store app. Unrelated products are left alone.
+
+Successfully synced targets are not continually reapplied: a checkout or manual remote
+change does not automatically recreate a completed cart. A new local change or an explicit
+sync is required. Order detection and bidirectional cart import remain future work.
+
+## Sessions, testing and protocol references
+
+Session/refresh tokens are stored in the private `store_integrations.session` column in
+PostgreSQL so API, worker and SMS verification share one session across restarts. They
+are not returned by API responses or included in connector error messages. Protect
+database access and backups as you protect the environment file; these session values
+are not separately encrypted at rest.
+
+Both integrations use unofficial web/mobile APIs and may require adjustment when stores
+change their protocols. Tests use mocked HTTP responses and a temporary SQLite database;
+they do not authenticate to real accounts. Set `TEST_DATABASE_URL` to a dedicated test
+PostgreSQL database to exercise production persistence. Do not point tests at production.
+
+Protocol sources used for implementation:
+
+- [Picnic login and SMS verification](https://github.com/MRVDH/picnic-api/blob/main/src/domains/auth/service.ts)
+- [Picnic cart protocol](https://github.com/MRVDH/picnic-api/blob/main/src/domains/cart/service.ts)
+- [Picnic legacy search protocol](https://github.com/MikeBrink/python-picnic-api/blob/master/python_picnic_api/client.py)
+- [Chronodrive OAuth and public frontend config](https://github.com/y-vex/chronodrive-mcp/blob/main/client.py)
+- [Chronodrive product/cart contract](https://github.com/machintrucbidule/cOURSesDrive/blob/main/docs/api-chronodrive-contract.md)

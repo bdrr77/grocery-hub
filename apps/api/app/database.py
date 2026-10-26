@@ -1,5 +1,5 @@
 """Scan receipts and list updates commit in one transaction."""
-from sqlalchemy import CheckConstraint, Column, Integer, MetaData, String, Table, create_engine, select
+from sqlalchemy import JSON, CheckConstraint, Column, Float, Integer, MetaData, String, Table, create_engine, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -21,6 +21,49 @@ receipts = Table(
     Column("barcode", String(32), nullable=False),
 )
 
+STORES = ("picnic", "chronodrive")
+integrations = Table(
+    "store_integrations", metadata,
+    Column("store", String(32), primary_key=True),
+    Column("status", String(32), nullable=False, default="pending"),
+    Column("message", String(500), nullable=False, default="En attente du worker."),
+    Column("checked_at", Float, nullable=False, default=0),
+    Column("retry_at", Float, nullable=False, default=0),
+    Column("session", JSON, nullable=False, default=dict),
+    Column("fingerprint", String(64), nullable=False, default=""),
+    Column("lease_owner", String(64), nullable=False, default=""),
+    Column("lease_until", Float, nullable=False, default=0),
+)
+targets = Table(
+    "store_sync_targets", metadata,
+    Column("store", String(32), primary_key=True),
+    Column("ean", String(32), primary_key=True),
+    Column("quantity", Integer, nullable=False),
+    Column("revision", Integer, nullable=False, default=1),
+    Column("label", String(250), nullable=False),
+    Column("product_id", String(128), nullable=True),
+    Column("product_name", String(250), nullable=True),
+    Column("price_cents", Integer, nullable=True),
+    Column("candidates", JSON, nullable=False, default=list),
+    Column("status", String(32), nullable=False, default="queued"),
+    Column("message", String(500), nullable=False, default="En attente de synchronisation."),
+    Column("retry_at", Float, nullable=False, default=0),
+)
+
+
+def insert_for(table):
+    return (sqlite_insert if engine.dialect.name == "sqlite" else pg_insert)(table)
+
+
+def enqueue(connection, ean, quantity, label):
+    for store in STORES:
+        entry = insert_for(targets).values(store=store, ean=ean, quantity=quantity, label=label)
+        connection.execute(entry.on_conflict_do_update(
+            index_elements=[targets.c.store, targets.c.ean],
+            set_={"quantity": quantity, "label": label, "revision": targets.c.revision + 1,
+                  "status": "queued", "message": "En attente de synchronisation.", "retry_at": 0},
+        ))
+
 
 def add_barcode(barcode: str, event_id: str, device_id: str, label: str) -> None:
     insert = sqlite_insert if engine.dialect.name == "sqlite" else pg_insert
@@ -40,6 +83,8 @@ def add_barcode(barcode: str, event_id: str, device_id: str, label: str) -> None
         connection.execute(item.on_conflict_do_update(
             index_elements=[items.c.ean], set_={"quantity": items.c.quantity + 1}
         ))
+        saved = connection.execute(select(items).where(items.c.ean == barcode)).mappings().one()
+        enqueue(connection, barcode, saved["quantity"], saved["label"])
 
 
 def list_items() -> list[dict]:

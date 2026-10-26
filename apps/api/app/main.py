@@ -1,18 +1,25 @@
 import hmac
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from .config import settings
-from .database import add_barcode, engine, items, list_items, metadata
+from .database import STORES, add_barcode, engine, enqueue, items, list_items, metadata, targets
+from .connectors.base import ConnectorError
+from .integration_service import initialize, operate, public_status
 from .products import product_label
-from .schemas import HealthResponse, ScanRequest, ScanResponse, ShoppingItemResponse
+from .schemas import HealthResponse, ScanRequest, ScanResponse, ShoppingItemResponse, StoreSearchRequest, StoreMatchRequest, VerificationRequest
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     metadata.create_all(engine)
+    initialize()
     yield
     engine.dispose()
 
@@ -56,7 +63,7 @@ def scan_item(
         barcode=payload.barcode,
         event_id=payload.event_id,
         device_id=device_id,
-        message="Saved to shopping list. Store synchronization is not implemented yet.",
+        message="Saved to shopping list. Store synchronization queued.",
     )
 
 
@@ -83,15 +90,60 @@ def create_item(payload: ScanRequest):
 @app.delete("/api/v1/items/{ean}", status_code=204)
 def remove_item(ean: str):
     with engine.begin() as connection:
+        label = connection.execute(select(items.c.label).where(items.c.ean == ean)).scalar_one_or_none()
         result = connection.execute(delete(items).where(items.c.ean == ean))
         if not result.rowcount:
             raise HTTPException(status_code=404, detail="Item not found")
+        enqueue(connection, ean, 0, label)
 
 
 @app.get("/api/v1/integrations")
 def integrations():
-    # Credentials alone cannot establish a connection while adapters are stubs.
-    return [{
-        "id": store, "name": name, "status": "not_implemented", "connected": False,
-        "message": "Connecteur non implémenté : connexion et synchronisation des paniers indisponibles.",
-    } for store, name in [("picnic", "Picnic"), ("chronodrive", "Chronodrive")]]
+    return public_status()
+
+
+async def store_action(store, action, **kwargs):
+    try:
+        return await operate(store, action, **kwargs)
+    except ConnectorError as error:
+        code = 409 if error.status in {"busy", "invalid_match"} else 404 if error.status == "not_found" else 400
+        raise HTTPException(status_code=code, detail=error.message) from error
+
+
+@app.post("/api/v1/integrations/{store}/connect")
+async def connect_store(store: str):
+    await store_action(store, "connect")
+    return public_status()
+
+
+@app.post("/api/v1/integrations/{store}/sync", status_code=202)
+def request_sync(store: str):
+    if store not in STORES:
+        raise HTTPException(status_code=404, detail="Magasin inconnu.")
+    with engine.begin() as connection:
+        connection.execute(update(targets).where(targets.c.store == store).values(status="queued", retry_at=0, revision=targets.c.revision + 1))
+    return {"message": "Synchronisation demandée. Le worker mettra à jour les articles associés."}
+
+
+@app.post("/api/v1/integrations/{store}/search")
+async def search_store(store: str, payload: StoreSearchRequest):
+    return await store_action(store, "search", ean=payload.ean, query=payload.query)
+
+
+@app.post("/api/v1/integrations/{store}/match", status_code=202)
+async def match_store(store: str, payload: StoreMatchRequest):
+    await store_action(store, "match", ean=payload.ean, product_id=payload.product_id)
+    return {"message": "Produit associé. Synchronisation en attente."}
+
+
+@app.post("/api/v1/integrations/picnic/send-code")
+async def send_picnic_code():
+    # A code is sent only after an explicit UI action, never by the polling worker.
+    await store_action("picnic", "send-code")
+    return public_status()
+
+
+@app.post("/api/v1/integrations/picnic/verify-code")
+async def verify_picnic_code(payload: VerificationRequest):
+    await store_action("picnic", "verify-code", code=payload.code)
+    return public_status()

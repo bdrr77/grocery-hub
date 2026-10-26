@@ -11,6 +11,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U grocery -d grocery"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   redis:
     image: redis:8-alpine
@@ -23,20 +28,41 @@ services:
       DATABASE_URL: postgresql+psycopg://grocery:grocery@postgres:5432/grocery
       REDIS_URL: redis://redis:6379/0
       SCANNER_DEVICE_TOKENS: dev:dev-token
+      PICNIC_USERNAME: ${PICNIC_USERNAME:-}
+      PICNIC_PASSWORD: ${PICNIC_PASSWORD:-}
+      PICNIC_COUNTRY_CODE: ${PICNIC_COUNTRY_CODE:-FR}
+      CHRONODRIVE_EMAIL: ${CHRONODRIVE_EMAIL:-}
+      CHRONODRIVE_USERNAME: ${CHRONODRIVE_USERNAME:-}
+      CHRONODRIVE_PASSWORD: ${CHRONODRIVE_PASSWORD:-}
+      CHRONODRIVE_STORE_ID: ${CHRONODRIVE_STORE_ID:-}
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   worker:
-    build: ./apps/worker
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://grocery:grocery@postgres:5432/grocery
       REDIS_URL: redis://redis:6379/0
+      PICNIC_USERNAME: ${PICNIC_USERNAME:-}
+      PICNIC_PASSWORD: ${PICNIC_PASSWORD:-}
+      PICNIC_COUNTRY_CODE: ${PICNIC_COUNTRY_CODE:-FR}
+      CHRONODRIVE_EMAIL: ${CHRONODRIVE_EMAIL:-}
+      CHRONODRIVE_USERNAME: ${CHRONODRIVE_USERNAME:-}
+      CHRONODRIVE_PASSWORD: ${CHRONODRIVE_PASSWORD:-}
+      CHRONODRIVE_STORE_ID: ${CHRONODRIVE_STORE_ID:-}
     depends_on:
-      - postgres
-      - redis
+      api:
+        condition: service_healthy
 
   web:
     build: ./apps/web

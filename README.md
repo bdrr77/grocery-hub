@@ -97,9 +97,13 @@ PostgreSQL shopping list. Repeated additions increase quantity; delivery retries
 idempotent per device/event ID. Items can be removed, and the list survives restarts.
 Product names come from Open Food Facts when available; unknown barcodes are still saved.
 
-Picnic and Chronodrive connection cards explicitly report that their adapters are not
-implemented. Store cart synchronization, prices, Bring integration, product matching,
-orders and the transactional outbox/worker processing remain future work.
+Picnic and Chronodrive connectors support login, search, verified EAN matches, manual
+product selection and background cart quantity synchronization. Picnic SMS verification
+is available in the dashboard. A database-backed outbox keeps scans independent of
+store outages. Connection cards show configuration, verification, connection and worker
+errors, with per-item sync results. Bring integration and order detection remain planned.
+These store APIs are unofficial; account-specific login and catalog behavior must be
+verified against your accounts after deployment. See [connector setup](docs/connectors.md).
 
 The browser uses same-origin API routes through Next.js. Docker Compose sets the
 server-only `API_INTERNAL_URL` at runtime; a public API build-time URL is unnecessary.

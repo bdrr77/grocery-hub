@@ -7,6 +7,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const route = path.join("/");
   const allowed = (route === "items" && ["GET", "POST"].includes(request.method)) ||
     (route === "integrations" && request.method === "GET") ||
+    (/^integrations\/(picnic|chronodrive)\/(connect|sync|search|match)$/.test(route) && request.method === "POST") ||
+    (/^integrations\/picnic\/(send-code|verify-code)$/.test(route) && request.method === "POST") ||
     (/^items\/[0-9]{8,32}$/.test(route) && request.method === "DELETE");
   if (!allowed) return NextResponse.json({ detail: "Not found" }, { status: 404 });
   const origin = request.headers.get("origin");
@@ -20,7 +22,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
       headers: { "Content-Type": "application/json" },
       body: request.method === "POST" ? await request.text() : undefined,
       cache: "no-store",
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(route.startsWith("integrations/") ? 90000 : 15000),
     });
     return new Response(response.status === 204 ? null : await response.text(), {
       status: response.status,
