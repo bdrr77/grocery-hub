@@ -8,6 +8,9 @@ function createClient(input, Client) {
   if (typeof client.sendRequestWithHeaders === "function") {
     const original = client.sendRequestWithHeaders.bind(client);
     client.sendRequestWithHeaders = async (...args) => {
+      // Search pages and their feature configuration must use the same app identity.
+      // The pinned client omits these headers for its internal bootstrap request.
+      if (args[1]==="/bootstrap") args[3]={...args[3],includePicnicHeaders:true};
       try {return await original(...args);}
       catch(error) {
         const path = String(args[1]);
@@ -46,7 +49,7 @@ export async function searchProducts(input, Client) {
       const page = await client.app.getPage(`search-page-results?search_term=${encodeURIComponent(input.query)}`);
       if (page.format==="fusion") return fusionProducts(page.page);
     }
-    if (!error.step) error.step = error.message==="The search page has no search parameters" ? "search-parameters" : error.message==="The search page has no fetchSearchResults action" ? "search-action-discovery" : "search-format";
+    if (!error.step) error.step = error.message==="The search page has no search parameters" ? "search-parameters" : error.message==="The search page has no fetchSearchResults action" ? "search-action-discovery" : error.message==="The bootstrap data has no client_component_cdn_base_url" ? "bootstrap" : "search-format";
     throw error;
   }
   if (!results || !Object.hasOwn(results, "products")) throw new Error("Unexpected search format");
@@ -151,7 +154,18 @@ export async function execute(input, Client) {
 
 export function failureDetails(error) {
   const stages = new Set(["search-page","search-action","bootstrap","client-chunk","search-format","product-page","search-parameters","search-action-discovery"]);
-  return {error:"request_failed",http_status:Number.isInteger(error?.status) ? error.status : null,step:stages.has(error?.step) ? error.step : null,received_format:["fusion","rsc"].includes(error?.receivedFormat) ? error.receivedFormat : null,code:error?.code==="QUANTITY_MISMATCH" ? error.code : null};
+  const reasons = new Map([
+    ["The bootstrap data has no client_component_cdn_base_url","missing-client-config"],
+    ["The search page has no search parameters","missing-search-parameters"],
+    ["The search page has no fetchSearchResults action","missing-search-action"],
+    ["Unexpected fetchSearchResults response","unexpected-action-response"],
+    ["Invalid Fusion page","unexpected-fusion-layout"],
+    ["Unexpected search format","unexpected-search-result"],
+    ["Unexpected search sections","unexpected-search-sections"],
+    ["Unexpected search products","unexpected-search-products"],
+  ]);
+  const reason = reasons.get(error?.message) || (/^RSC reference cycle at /.test(error?.message || "") ? "rsc-reference-cycle" : error instanceof SyntaxError ? "decode-error" : error instanceof TypeError ? "client-type-error" : "unspecified");
+  return {error:"request_failed",reason,http_status:Number.isInteger(error?.status) ? error.status : null,step:stages.has(error?.step) ? error.step : null,received_format:["fusion","rsc"].includes(error?.receivedFormat) ? error.receivedFormat : null,code:error?.code==="QUANTITY_MISMATCH" ? error.code : null};
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -180,6 +180,12 @@ a controlled step name (page, action, bootstrap, client component or product she
 and the upstream HTTP status when available. Raw response bodies, URLs, credentials
 and tokens are not included in errors. A catalog failure does not disconnect an
 otherwise authenticated account. The logs include the same safe step/status fields.
+Logs also include an allowlisted `reason` (missing client configuration, missing action,
+unsupported action response, RSC cycle or decoder/type error); no raw exception text is
+logged. The bridge adds the configured app/device headers to the client's internal
+bootstrap request so its search feature configuration uses the same identity as the
+search page. This mismatch is covered by a regression test; a real account retry is
+still required to establish whether it caused a particular production search failure.
 
 Protocol sources used for implementation:
 

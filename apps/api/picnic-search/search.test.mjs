@@ -8,6 +8,14 @@ const library = require("picnic-api");
 const Client = library.default || library;
 const input = {country:"FR",version:"15",token:"test-private-token",device:"test-device",agent:"30100;1.251.0-15611;",query:"Nutella"};
 
+test("search diagnostics distinguish missing configuration and decoder failures without logging raw error text",()=>{
+  assert.equal(failureDetails(new Error("The bootstrap data has no client_component_cdn_base_url")).reason,"missing-client-config");
+  assert.equal(failureDetails(new Error("Unexpected fetchSearchResults response")).reason,"unexpected-action-response");
+  assert.equal(failureDetails(new Error("RSC reference cycle at private-session-value")).reason,"rsc-reference-cycle");
+  assert.equal(failureDetails(new SyntaxError("private response text")).reason,"decode-error");
+  assert.ok(!JSON.stringify(failureDetails(new Error("private account details"))).includes("private"));
+});
+
 test("real client follows RSC search, discovers action, preserves version and keeps CDN requests unauthenticated", async () => {
   const original = globalThis.fetch;
   const requests = [];
@@ -27,7 +35,11 @@ test("real client follows RSC search, discovers action, preserves version and ke
       ];
       return new Response(lines.join("\n"),{headers:{"Content-Type":"text/x-component","X-Page-Version":"page-version"}});
     }
-    if (path.endsWith("/bootstrap")) return Response.json({in_app_feature_config:{client_component_cdn_base_url:"https://cdn.example"}});
+    if (path.endsWith("/bootstrap")) {
+      assert.equal(new Headers(options.headers).get("x-picnic-agent"),input.agent);
+      assert.equal(new Headers(options.headers).get("x-picnic-did"),input.device);
+      return Response.json({in_app_feature_config:{client_component_cdn_base_url:"https://cdn.example"}});
+    }
     assert.ok(path.endsWith("/pages/action/act_fetchSearchResults_abcd1234"));
     assert.equal(options.method,"POST");
     assert.equal(new Headers(options.headers).get("x-page-version"),"page-version");

@@ -54,7 +54,9 @@ class PicnicAdapter(StoreAdapter):
                     details.append(f"HTTP amont {http_status}")
                 if result.get("received_format") in {"fusion", "rsc"}:
                     details.append("format " + result["received_format"])
-                log.warning("Picnic operation=%s step=%s upstream_status=%s", action, step if step in stages else "unknown", http_status if isinstance(http_status,int) else None)
+                reasons = {"missing-client-config","missing-search-parameters","missing-search-action","unexpected-action-response","unexpected-fusion-layout","unexpected-search-result","unexpected-search-sections","unexpected-search-products","rsc-reference-cycle","decode-error","client-type-error","unspecified"}
+                reason = result.get("reason") if result.get("reason") in reasons else "unspecified"
+                log.warning("Picnic operation=%s step=%s upstream_status=%s reason=%s", action, step if step in stages else "unknown", http_status if isinstance(http_status,int) else None, reason)
                 state = "search_error" if action == "search" else "ean_lookup_error" if action == "product" else "upstream_error"
                 message = " ; ".join(details) or "réponse du catalogue non reconnue"
                 raise ConnectorError(state, f"Picnic : {message}. Réessayez ou modifiez la recherche.")
