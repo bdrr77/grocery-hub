@@ -105,8 +105,11 @@ those lines; the store may calculate promotions using other cart contents.
 unrelated products, deposits, credits and fees. The comparison panel shows coverage,
 other cart lines, reported fees/deposits and the last snapshot time. Missing totals
 remain unknown; snapshots older than five minutes or from a disconnected/different
-account are not presented as current prices. No price difference is displayed while
-either list is incomplete. Compare the selected pack sizes before interpreting an
+account are not presented as current prices. Full-selection differences require both
+lists to be complete. If an item is unavailable or unmatched, fresh reported shop-cart
+totals can still be compared as an explicitly partial basket difference; missing
+products are not treated as free. Pending, stale or disconnected carts are not compared.
+Compare the selected pack sizes before interpreting an
 amount difference as savings on equivalent products.
 
 Two EANs cannot target the same store product. To change an existing association, remove

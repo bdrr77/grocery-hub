@@ -128,6 +128,8 @@ export default function Home() {
 
   const comparable = connections.length===2 && connections.every(store=>store.pricing?.list_complete && store.pricing.item_count===items.length && items.length>0);
   const difference = comparable ? Math.abs(connections[0].pricing!.list_total_cents! - connections[1].pricing!.list_total_cents!) : null;
+  const basketsComparable = connections.length===2 && connections.every(store=>store.connected && store.pricing?.fresh && !store.pricing.updating && store.pricing.cart_total_cents != null);
+  const basketDifference = basketsComparable ? Math.abs(connections[0].pricing!.cart_total_cents! - connections[1].pricing!.cart_total_cents!) : null;
 
   return <main>
     <header><div><p>Maison</p><h1>Courses</h1></div><button type="button" disabled={loading || busy} onClick={() => { void refresh(); void refreshConnections(); }}>Actualiser</button></header>
@@ -170,6 +172,7 @@ export default function Home() {
         <small>{store.pricing?.fetched_at ? `Relevé à ${new Date(store.pricing.fetched_at*1000).toLocaleTimeString("fr-FR")}${store.pricing.fresh ? "" : " · à actualiser"}` : "Aucun relevé de prix disponible."}</small>
       </article>)}</div>
       {difference != null && <p className="comparison-difference">Écart entre vos sélections : <strong>{money(difference)}</strong></p>}
+      {difference == null && basketDifference != null && <div className="comparison-difference"><p>Écart entre les paniers actuels : <strong>{money(basketDifference)}</strong></p>{items.length>0 && <small>Comparaison partielle : certains produits de votre liste sont absents des paniers. Leurs prix ne sont pas compris dans cet écart.</small>}</div>}
       <p className="hint">Ma sélection additionne les lignes associées à votre liste. Le panier du magasin comprend aussi ses autres articles et ses frais. Vérifiez les formats choisis ; les remises peuvent dépendre du panier complet.</p>
     </section>
     <form onSubmit={add} className="add">
