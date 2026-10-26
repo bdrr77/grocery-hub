@@ -1,14 +1,13 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import ProductSearch, { ShopBadge } from "./product-search";
 
-type Item = { ean: string; label: string; quantity: number };
+type Item = { ean: string; label: string; quantity: number; size?:string|null; source?:string|null };
 type Lookup = {status:string;message:string;checked_at:number};
-type Suggestion = {source:"chronodrive"|"openfoodfacts"|"user";query:string;name:string;size:string};
 type SyncItem = { ean: string; quantity: number; status: string; message: string; product_id: string | null; product_name: string | null; price_cents: number | null; size?:string; unit_price_cents?:number|null; unit_price_unit?:string|null; ean_lookup?:Lookup|null };
 type Pricing = {fresh:boolean;fetched_at:number|null;list_complete:boolean;list_total_cents:number|null;known_list_total_cents:number|null;priced_items:number;item_count:number;missing_items:number;cart_total_cents:number|null;deposit_cents:number|null;fees_cents:number|null;discount_cents:number|null;other_cart_items:number|null};
 type Integration = { id: string; name: string; status: string; connected: boolean; configured: boolean; message: string; checked_at: number | null; items: SyncItem[]; pricing?:Pricing };
-type Product = { id: string; name: string; price_cents: number | null; size: string; eans: string[] };
 
 const money = (value: number) => new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(value / 100);
 const connectionLabels: Record<string,string> = {not_configured:"À configurer", otp_required:"Code SMS requis", pending:"En attente", stale:"Worker à vérifier", busy:"En cours"};
@@ -34,12 +33,6 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [storeBusy, setStoreBusy] = useState("");
   const [otp, setOtp] = useState("");
-  const [selection, setSelection] = useState<{store: string; ean: string; query: string} | null>(null);
-  const [candidates, setCandidates] = useState<Product[]>([]);
-  const [searched, setSearched] = useState(false);
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [searchError, setSearchError] = useState("");
-  const [lookup, setLookup] = useState<Lookup|null>(null);
   const pendingScan = useRef<{ value: string; event_id: string } | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -54,6 +47,7 @@ export default function Home() {
   async function refreshConnections() {
     try {
       setConnections(await api<Integration[]>("integrations"));
+      setItems(await api<Item[]>("items"));
       setConnectionError("");
     } catch {
       setConnectionError("Statut indisponible : impossible de joindre l’API.");
@@ -64,7 +58,7 @@ export default function Home() {
   useEffect(() => {
     void refresh();
     void refreshConnections();
-    const timer = setInterval(() => { void refreshConnections(); }, 10000);
+    const timer = setInterval(() => { void refreshConnections(); }, 5000);
     return () => clearInterval(timer);
   }, []);
 
@@ -94,7 +88,6 @@ export default function Home() {
     finally { setBusy(false); window.setTimeout(()=>input.current?.focus(),0); }
   }
 
-  useEffect(() => {if(selection) document.getElementById("store-query")?.focus();}, [selection?.store, selection?.ean]);
 
   async function remove(ean: string) {
     setBusy(true); setError(""); setNotice("");
@@ -102,7 +95,6 @@ export default function Home() {
       await api<void>(`items/${ean}`, { method: "DELETE" });
       setItems(current => current.filter(item => item.ean !== ean));
       setNotice("Produit retiré de la liste. Retrait des paniers associés en attente.");
-      if (selection?.ean === ean) setSelection(null);
       void refreshConnections();
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
@@ -124,43 +116,8 @@ export default function Home() {
       await api(`integrations/${store}/${action}`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
       setNotice(action === "send-code" ? "Code SMS demandé." : action === "sync" ? "Synchronisation demandée au worker." : action === "match" ? "Produit associé. Synchronisation en attente." : action === "refresh" ? "Prix des paniers actualisés." : "Connexion mise à jour.");
       if (action === "verify-code") setOtp("");
-      if (action === "match") setSelection(null);
     } catch (e) { setError((e as Error).message); }
     finally { setStoreBusy(""); await refreshConnections(); }
-  }
-
-  async function searchProducts(event: FormEvent) {
-    event.preventDefault();
-    if (!selection || storeBusy) return;
-    setStoreBusy(`${selection.store}/search`); setError(""); setSearchError(""); setNotice(""); setCandidates([]); setSearched(false);
-    try {
-      setCandidates(await api<Product[]>(`integrations/${selection.store}/search`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ean:selection.ean, query:selection.query.trim()})}));
-      setSearched(true);
-    } catch (e) { setSearchError((e as Error).message); }
-    finally { setStoreBusy(""); await refreshConnections(); }
-  }
-
-  async function openPicker(store:string, item:Item) {
-    if(storeBusy) return;
-    setSelection({store,ean:item.ean,query:item.label.startsWith("EAN ")?"":item.label.slice(0,200)});
-    setCandidates([]); setSuggestions([]); setSearchError(""); setLookup(null); setSearched(false); setError(""); setNotice("");
-    setStoreBusy(`${store}/search`);
-    try {
-      const hints = await api<{suggestions:Suggestion[];ean_lookup:Lookup|null}>(`items/${item.ean}/search-suggestions`);
-      setSuggestions(hints.suggestions); setLookup(hints.ean_lookup);
-      const tried = new Set<string>();
-      for(const hint of hints.suggestions.filter(hint=>hint.source!=="user" && hint.query.trim())) {
-        if(tried.has(hint.query.toLocaleLowerCase())) continue;
-        tried.add(hint.query.toLocaleLowerCase());
-        setSelection({store,ean:item.ean,query:hint.query});
-        const results = await api<Product[]>(`integrations/${store}/search`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ean:item.ean,query:hint.query})});
-        if(results.length) {setCandidates(results); setSearched(true); return;}
-      }
-      const manual = hints.suggestions.find(hint=>hint.source==="user");
-      if(manual) setSelection({store,ean:item.ean,query:manual.query});
-      setSearched(tried.size>0);
-    } catch(e) {setSearchError((e as Error).message);}
-    finally {setStoreBusy(""); await refreshConnections();}
   }
 
   const comparable = connections.length===2 && connections.every(store=>store.pricing?.list_complete && store.pricing.item_count===items.length && items.length>0);
@@ -177,8 +134,8 @@ export default function Home() {
           {connection?.checked_at && <p className="checked">Dernière vérification : {new Date(connection.checked_at * 1000).toLocaleTimeString("fr-FR")}</p>}
           {connection?.configured && <div className="store-actions">
             <button type="button" disabled={!!storeBusy} onClick={() => void storeAction(connection.id,"connect")}>{storeBusy === `${connection.id}/connect` ? "Connexion…" : "Reconnecter"}</button>
-            <button type="button" disabled={!!storeBusy || !connection.connected} onClick={() => void storeAction(connection.id,"sync")}>Synchroniser</button>
-            <button type="button" disabled={!!storeBusy || !connection.connected} onClick={() => void storeAction(connection.id,"refresh")}>Actualiser les prix</button>
+            <button type="button" disabled={!!storeBusy || !connection.connected || connection.items.some(job=>job.status==="queued")} onClick={() => void storeAction(connection.id,"sync")}>Synchroniser</button>
+            <button type="button" disabled={!!storeBusy || !connection.connected || connection.items.some(job=>job.status==="queued")} onClick={() => void storeAction(connection.id,"refresh")}>Actualiser les prix</button>
           </div>}
           {connection?.id === "picnic" && connection.status === "otp_required" && <div className="verification">
             <button type="button" disabled={!!storeBusy} onClick={() => void storeAction("picnic","send-code")}>Recevoir un code SMS</button>
@@ -220,32 +177,19 @@ export default function Home() {
       <h2 id="list-title">Ma liste <span className="count">{items.reduce((sum, item) => sum + item.quantity, 0)} article(s)</span></h2>
       {loading ? <p role="status">Chargement de la liste…</p> : !items.length && !error ? <p className="empty">Votre liste est vide. Ajoutez votre premier code-barres ci-dessus.</p> : null}
       <div className="grid">{items.map(item => <article key={item.ean}>
-        <h3>{item.label}</h3><p className="ean">{item.ean.startsWith("n") ? "Produit ajouté par nom" : `EAN ${item.ean}`}</p><div className="item-actions"><div className="quantity-controls"><button type="button" disabled={busy || item.quantity<=1} aria-label={`Diminuer ${item.label}`} onClick={()=>void quantity(item,item.quantity-1)}>−</button><strong>Quantité : {item.quantity}</strong><button type="button" disabled={busy || item.quantity>=999} aria-label={`Augmenter ${item.label}`} onClick={()=>void quantity(item,item.quantity+1)}>+</button></div><button type="button" disabled={busy} aria-label={`Retirer ${item.label}`} onClick={() => void remove(item.ean)}>Retirer</button></div>
+        <h3>{item.label}</h3>{item.size && <p className="item-pack">{item.size}</p>}{item.source==="openfoodfacts" && <ShopBadge source="openfoodfacts"/>}<p className="ean">{item.ean.startsWith("n") ? "Produit ajouté par nom" : `EAN ${item.ean}`}</p><div className="item-actions"><div className="quantity-controls"><button type="button" disabled={busy || item.quantity<=1} aria-label={`Diminuer ${item.label}`} onClick={()=>void quantity(item,item.quantity-1)}>−</button><strong>Quantité : {item.quantity}</strong><button type="button" disabled={busy || item.quantity>=999} aria-label={`Augmenter ${item.label}`} onClick={()=>void quantity(item,item.quantity+1)}>+</button></div><button type="button" disabled={busy} aria-label={`Retirer ${item.label}`} onClick={() => void remove(item.ean)}>Retirer</button></div>
         <div className="item-stores">{connections.map(store => {
           const job = store.items.find(job => job.ean === item.ean);
-          return <div key={store.id}><strong>{store.name}</strong>{job?.product_name && <span>{job.product_name}</span>}
-            <small>{!store.connected ? store.message : job?.message || "En attente de synchronisation."}</small>
-            {job?.ean_lookup && !job.product_id && <small>{job.ean_lookup.message}</small>}
+          return <div key={store.id}><ShopBadge source={store.id}/>{job?.product_name && <span>{job.product_name}</span>}
+            {store.configured && ["connected","pending","busy"].includes(store.status) && (!job || job.status==="queued") && (job?.product_id || /^\d+$/.test(item.ean)) ? <small className="shop-progress" role="status"><span className="loading-spinner" aria-hidden="true"/>{job?.product_id ? "Mise à jour du panier et du prix…" : "Recherche du produit et du prix…"}</small> : <small>{!store.connected ? "Magasin déconnecté" : !job?.product_id ? "Recherchez un produit ci-dessous pour ce magasin." : job.status==="synced" ? "Dans votre panier" : "Mise à jour impossible. Réessayez depuis le magasin."}</small>}
             {job?.size && <small>Format : {job.size}</small>}
             {job?.price_cents != null && <small>Prix observé : {money(job.price_cents)} / article</small>}
             {job?.unit_price_cents != null && <small>{money(job.unit_price_cents)} / {job.unit_price_unit}</small>}
-            {store.connected && !job?.product_id && <button type="button" disabled={!!storeBusy} onClick={()=>void openPicker(store.id,item)}>Choisir chez {store.name}</button>}
           </div>;
         })}</div>
+        <ProductSearch ean={item.ean} label={item.label} matches={Object.fromEntries(connections.map(store=>[store.id,store.items.find(job=>job.ean===item.ean)?.product_id || null]))} onChange={async()=>{setItems(await api<Item[]>("items"));await refreshConnections();}}/>
       </article>)}</div>
     </section>
-    {selection && <section className="product-picker" aria-labelledby="picker-title">
-      <div className="connection-heading"><h2 id="picker-title">Choisir chez {connections.find(store=>store.id===selection.store)?.name}</h2><button type="button" disabled={!!storeBusy} onClick={()=>setSelection(null)}>Fermer</button></div>
-      <p>{items.find(item=>item.ean===selection.ean)?.label || "Article sélectionné"}. Choisissez le produit et le format souhaités.</p>
-      <p className="hint">Format recherché : poids, volume ou taille du paquet. Quantité à acheter : {items.find(item=>item.ean===selection.ean)?.quantity || 1}.</p>
-      {selection.store==="picnic" && lookup && <p className="hint">{lookup.message}</p>}
-      {!!suggestions.length && <div className="search-suggestions" aria-label="Suggestions de recherche">{suggestions.filter(hint=>hint.query).map(hint=><button type="button" disabled={!!storeBusy} key={hint.source} onClick={()=>setSelection({...selection,query:hint.query})}>{hint.source==="chronodrive" ? "Chronodrive" : hint.source==="openfoodfacts" ? "Open Food Facts" : "Ma recherche"} : {hint.query}</button>)}</div>}
-      {searchError && <p className="error" role="alert">{searchError}</p>}
-      <form onSubmit={searchProducts}><label htmlFor="store-query">Rechercher un produit</label><div className="search-row"><input id="store-query" required maxLength={200} value={selection.query} onChange={event=>setSelection({...selection,query:event.target.value})}/><button type="submit" disabled={!!storeBusy}>Rechercher</button></div></form>
-      {storeBusy.endsWith("/search") && <p role="status">Recherche en cours…</p>}
-      {searched && !candidates.length && <p>Aucun produit trouvé. Essayez un autre nom.</p>}
-      <ul className="candidates">{candidates.map(product=><li key={product.id}><div><strong>{product.name}</strong><small>{product.size}{product.price_cents != null ? ` · ${money(product.price_cents)}` : ""}</small></div><button disabled={!!storeBusy} type="button" onClick={()=>void storeAction(selection.store,"match",{ean:selection.ean,product_id:product.id})}>Associer</button></li>)}</ul>
-    </section>}
     <footer>Les noms des produits sont recherchés dans <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/">ODbL</a>). Un produit inconnu reste enregistré avec son EAN.</footer>
   </main>;
 }

@@ -122,6 +122,20 @@ sync is required. Order detection and bidirectional cart import remain future wo
 
 ## Sessions, testing and protocol references
 
+Each list card includes a single inline name search across connected stores and
+Open Food Facts. Results sharing a verified barcode appear in one row with coloured
+source badges, store prices and pack sizes. Each store offer is selected explicitly;
+similar names alone never authorize a cart association. An Open Food Facts selection
+only changes the card name and pack size, preserves the entered barcode and shopping
+quantity, and supplies no price. Directory name searches are cached for five minutes.
+Failures in one source do not suppress the other sources' results.
+
+The worker polls every 30 seconds by default, then makes the store requests. Queued
+lookups and cart updates display a spinner beside the shop; errors and unresolved
+products stop the spinner. The browser checks for updates every five seconds. Manual
+search skips a shop while that item's automatic lookup is queued, and the sync/price
+buttons are disabled while the shop has queued work to prevent duplicate requests.
+
 Session/refresh tokens are stored in the private `store_integrations.session` column in
 PostgreSQL so API, worker and SMS verification share one session across restarts. They
 are not returned by API responses or included in connector error messages. Protect

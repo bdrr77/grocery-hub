@@ -7,11 +7,13 @@ from fastapi import FastAPI, Header, HTTPException, status
 from sqlalchemy import delete, select, update
 
 from .config import settings
-from .database import STORES, add_barcode, engine, enqueue, items, list_items, metadata, targets
+from .database import STORES, add_barcode, engine, enqueue, items, item_details, list_items, metadata, targets
 from .connectors.base import ConnectorError
 from .integration_service import initialize, operate, public_status
 from .products import product_label
 from .matching import search_suggestions
+from .catalog import search_catalog, use_directory_identity
+from .schemas import ProductSearchRequest, ProductIdentityRequest
 from .schemas import HealthResponse, ScanRequest, ScanResponse, ShoppingItemResponse, StoreSearchRequest, StoreMatchRequest, VerificationRequest, NamedItemRequest, QuantityRequest
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -96,6 +98,7 @@ def remove_item(ean: str):
         result = connection.execute(delete(items).where(items.c.ean == ean))
         if not result.rowcount:
             raise HTTPException(status_code=404, detail="Item not found")
+        connection.execute(delete(item_details).where(item_details.c.ean == ean))
         enqueue(connection, ean, 0, label)
 
 
@@ -138,6 +141,23 @@ def item_search_suggestions(ean: str):
         return search_suggestions(ean)
     except ConnectorError as error:
         raise HTTPException(status_code=404, detail=error.message) from error
+
+
+@app.post("/api/v1/items/{ean}/search")
+async def search_item_catalog(ean: str, payload: ProductSearchRequest):
+    try:
+        return await search_catalog(ean, payload.query)
+    except ConnectorError as error:
+        raise HTTPException(status_code=404 if error.status == "not_found" else 422, detail=error.message) from error
+
+
+@app.post("/api/v1/items/{ean}/identity", response_model=list[ShoppingItemResponse])
+def set_item_identity(ean: str, payload: ProductIdentityRequest):
+    try:
+        use_directory_identity(ean, payload.code)
+    except ConnectorError as error:
+        raise HTTPException(status_code=404 if error.status == "not_found" else 409, detail=error.message) from error
+    return list_items()
 
 
 @app.post("/api/v1/integrations/{store}/connect")

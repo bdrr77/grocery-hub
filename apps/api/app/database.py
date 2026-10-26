@@ -70,6 +70,13 @@ product_facts = Table(
     Column("data", JSON, nullable=False),
     Column("fetched_at", Float, nullable=False),
 )
+item_details = Table(
+    "shopping_item_details", metadata,
+    Column("ean", String(32), primary_key=True),
+    Column("size", String(100), nullable=False, default=""),
+    Column("source", String(32), nullable=False),
+    Column("source_id", String(128), nullable=False),
+)
 
 
 def insert_for(table):
@@ -111,5 +118,5 @@ def add_barcode(barcode: str, event_id: str, device_id: str, label: str) -> None
 def list_items() -> list[dict]:
     with engine.connect() as connection:
         return [dict(row) for row in connection.execute(
-            select(items).order_by(items.c.label, items.c.ean)
+            select(items, item_details.c.size, item_details.c.source).select_from(items.outerjoin(item_details, items.c.ean == item_details.c.ean)).order_by(items.c.label, items.c.ean)
         ).mappings()]

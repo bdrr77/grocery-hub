@@ -14,6 +14,9 @@ Implemented tables (created on API startup):
   fingerprint and fetch time. It never contains raw customer or payment data.
 - `store_ean_lookups`: per-store/item lookup outcome, controlled explanation and time.
 - `product_facts`: cached Open Food Facts name, brand and pack size for search hints.
+- `shopping_item_details`: selected product description source, source ID and pack
+  size. Choosing an Open Food Facts description preserves the list barcode, shopping
+  quantity and all store cart associations; it never creates a price or cart match.
 
 The app supports one shared household list. Item changes and sync targets commit in
 one transaction. Targets coalesce changes into the latest desired quantity; removal

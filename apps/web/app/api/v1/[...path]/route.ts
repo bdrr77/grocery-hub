@@ -8,6 +8,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const allowed = (route === "items" && ["GET", "POST"].includes(request.method)) ||
     (route === "integrations" && request.method === "GET") ||
     (route === "items/named" && request.method === "POST") ||
+    (/^items\/[A-Za-z0-9_-]{8,32}\/(search|identity)$/.test(route) && request.method === "POST") ||
     (/^items\/[A-Za-z0-9_-]{8,32}\/search-suggestions$/.test(route) && request.method === "GET") ||
     (/^integrations\/(picnic|chronodrive)\/(connect|sync|search|match|refresh)$/.test(route) && request.method === "POST") ||
     (/^integrations\/picnic\/(send-code|verify-code)$/.test(route) && request.method === "POST") ||
@@ -24,7 +25,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
       headers: { "Content-Type": "application/json" },
       body: ["POST", "PATCH"].includes(request.method) ? await request.text() : undefined,
       cache: "no-store",
-      signal: AbortSignal.timeout(route.startsWith("integrations/") ? 90000 : 15000),
+      signal: AbortSignal.timeout(route.startsWith("integrations/") || route.endsWith("/search") ? 90000 : 15000),
     });
     return new Response(response.status === 204 ? null : await response.text(), {
       status: response.status,

@@ -9,6 +9,16 @@ class ShoppingItemResponse(BaseModel):
     ean: str
     label: str
     quantity: int
+    size: str | None = None
+    source: str | None = None
+
+
+class ProductSearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=200)
+
+
+class ProductIdentityRequest(BaseModel):
+    code: str = Field(min_length=8, max_length=32, pattern=r"^[0-9]+$")
 
 
 class StoreSearchRequest(BaseModel):

@@ -1,8 +1,39 @@
 import json
 import logging
+import time
+from functools import lru_cache
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 log = logging.getLogger(__name__)
+
+
+def product_search(query: str) -> list[dict]:
+    return _product_search(query.strip(), int(time.time() // 300))
+
+
+@lru_cache(maxsize=64)
+def _product_search(query, time_bucket):
+    """Cache identical searches; OFF search is more limited than barcode reads."""
+    if query.isdigit():
+        details = product_details(query)
+        return [{**details, "id":query, "eans":[query], "price_cents":None}] if details else []
+    params = urlencode({"search_terms":query, "search_simple":1, "action":"process", "json":1, "page_size":10, "fields":"code,product_name,product_name_fr,brands,quantity"})
+    request = Request("https://world.openfoodfacts.org/cgi/search.pl?" + params, headers={"User-Agent":"GroceryHub/0.3 (https://grocery.dabrome.com)"})
+    with urlopen(request, timeout=8) as response:
+        data = json.load(response)
+    result = []
+    for product in data.get("products", []):
+        code = str(product.get("code", ""))
+        name = product.get("product_name_fr") or product.get("product_name")
+        if not code.isdigit() or not 8 <= len(code) <= 32 or not isinstance(name, str) or not name.strip():
+            continue
+        brand = product.get("brands") or ""
+        if isinstance(brand, str) and brand.split(",")[0].strip().casefold() not in name.casefold():
+            name = brand.split(",")[0].strip() + " " + name
+        size = product.get("quantity")
+        result.append({"id":code,"name":name.strip()[:250],"size":size[:100] if isinstance(size,str) else "", "eans":[code],"price_cents":None})
+    return result
 
 
 def product_details(barcode: str) -> dict | None:

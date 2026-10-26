@@ -10,10 +10,19 @@ from .config import settings
 from .connectors.base import ConnectorError
 from .connectors.chronodrive import ChronodriveAdapter
 from .connectors.picnic import PicnicAdapter
-from .database import STORES, cart_snapshots, ean_lookups, engine, insert_for, integrations, items, targets
+from .database import STORES, cart_snapshots, ean_lookups, engine, insert_for, integrations, item_details, items, targets
 from .pricing import summarize, product_card
 
 NAMES = {"picnic": "Picnic", "chronodrive": "Chronodrive"}
+
+
+def adopt_product_name(connection, ean, product, store):
+    """Replace an unresolved barcode title while preserving user-provided names."""
+    changed = connection.execute(update(items).where(items.c.ean == ean, items.c.label == f"EAN {ean}").values(label=product["name"]))
+    if changed.rowcount:
+        connection.execute(update(targets).where(targets.c.ean == ean).values(label=product["name"]))
+        entry = insert_for(item_details).values(ean=ean,size=product.get("size", ""),source=store,source_id=product["id"])
+        connection.execute(entry.on_conflict_do_nothing())
 
 
 def configuration(store):
@@ -137,6 +146,7 @@ async def operate(store, action="sync", *, ean=None, query=None, product_id=None
                 if conflict:
                     raise ConnectorError("invalid_match", "Ce produit magasin est déjà associé à un autre EAN.")
                 connection.execute(update(targets).where(targets.c.store == store, targets.c.ean == ean).values(product_id=product_id, product_name=product["name"], price_cents=product["price_cents"], status="queued", retry_at=0, revision=targets.c.revision + 1))
+                adopt_product_name(connection, ean, product, store)
         elif action == "sync":
             await sync_targets(store, adapter, owner)
         if action in {"sync", "connect", "verify-code", "refresh"}:
@@ -198,6 +208,7 @@ async def sync_targets(store, adapter, owner):
                     saved = connection.execute(update(targets).where(*condition).values(product_id=product.id, product_name=product.name, price_cents=product.price_cents, candidates=[product.public()]))
                     if not saved.rowcount:
                         continue
+                    adopt_product_name(connection, job["ean"], product.public(), store)
                 job["product_id"] = product.id
             if job["product_id"]:
                 # Absolute target after a fresh cart read makes retries after timeouts safe.
