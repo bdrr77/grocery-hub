@@ -19,6 +19,7 @@ class Product:
     eans: list[str]
     price_cents: int | None = None
     size: str = ""
+    brand: str = ""
 
     def public(self):
         return asdict(self)

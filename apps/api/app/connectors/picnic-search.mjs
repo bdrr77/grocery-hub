@@ -31,7 +31,7 @@ export function fusionProducts(page) {
   for (const node of objects(page.body)) {
     const item = node.type==="SELLING_UNIT_TILE" ? node.sellingUnit : null;
     if (!item?.id || !item.name || item.max_count===0) continue;
-    products.set(String(item.id), {id:String(item.id),name:item.name,eans:[],price_cents:Number.isInteger(item.display_price) ? item.display_price : null,size:item.unit_quantity || ""});
+    products.set(String(item.id), {id:String(item.id),name:item.name,eans:[],price_cents:Number.isInteger(item.display_price) ? item.display_price : null,size:item.unit_quantity || "",...(typeof item.brand==="string" && item.brand ? {brand:item.brand}:{})});
   }
   return [...products.values()].slice(0,30);
 }
@@ -61,6 +61,7 @@ export async function searchProducts(input, Client) {
         id: String(item.id), name: item.name, eans: [],
         price_cents: Number.isInteger(item.displayPrice) && item.displayPrice>0 ? item.displayPrice : null,
         size: item.unitQuantity || "",
+        ...(typeof item.brand==="string" && item.brand ? {brand:item.brand}:{}),
       });
     }
   }

@@ -108,7 +108,10 @@ class ChronodriveAdapter(StoreAdapter):
             name = labels.get("productLabel") or item.get("name") or item.get("label")
             if not item.get("id") or not name:
                 continue
-            result.append(Product(str(item["id"]), name, [str(ean) for ean in item.get("eans", [])], cents((item.get("prices") or {}).get("defaultPrice")), labels.get("unitQuantityLabel", "")))
+            brand = labels.get("brandLabel") or item.get("brand") or ""
+            if isinstance(brand, dict):
+                brand = brand.get("name", "")
+            result.append(Product(str(item["id"]), name, [str(ean) for ean in item.get("eans", [])], cents((item.get("prices") or {}).get("defaultPrice")), labels.get("unitQuantityLabel", ""), brand if isinstance(brand,str) else ""))
         return result
 
     async def get_cart(self):

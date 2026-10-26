@@ -32,7 +32,7 @@ def _product_search(query, time_bucket):
         if isinstance(brand, str) and brand.split(",")[0].strip().casefold() not in name.casefold():
             name = brand.split(",")[0].strip() + " " + name
         size = product.get("quantity")
-        result.append({"id":code,"name":name.strip()[:250],"size":size[:100] if isinstance(size,str) else "", "eans":[code],"price_cents":None})
+        result.append({"id":code,"name":name.strip()[:250],"brand":brand[:100] if isinstance(brand,str) else "", "size":size[:100] if isinstance(size,str) else "", "eans":[code],"price_cents":None})
     return result
 
 

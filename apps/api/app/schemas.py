@@ -21,6 +21,11 @@ class ProductIdentityRequest(BaseModel):
     code: str = Field(min_length=8, max_length=32, pattern=r"^[0-9]+$")
 
 
+class ProductSelectionRequest(BaseModel):
+    source: str = Field(pattern="^(picnic|chronodrive)$")
+    product_id: str = Field(min_length=1,max_length=128,pattern=r"^[A-Za-z0-9_-]+$")
+
+
 class StoreSearchRequest(BaseModel):
     ean: str = Field(min_length=8, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")
     query: str = Field(min_length=1, max_length=200)

@@ -15,8 +15,9 @@ Implemented tables (created on API startup):
 - `store_ean_lookups`: per-store/item lookup outcome, controlled explanation and time.
 - `product_facts`: cached Open Food Facts name, brand and pack size for search hints.
 - `shopping_item_details`: selected product description source, source ID and pack
-  size. Choosing an Open Food Facts description preserves the list barcode, shopping
-  quantity and all store cart associations; it never creates a price or cart match.
+  size. Choosing a verified result for an unresolved card can replace its EAN while
+  preserving shopping quantity. Existing mapped products and duplicate destination
+  EANs are protected. Open Food Facts never creates a price or cart association.
 
 The app supports one shared household list. Item changes and sync targets commit in
 one transaction. Targets coalesce changes into the latest desired quantity; removal

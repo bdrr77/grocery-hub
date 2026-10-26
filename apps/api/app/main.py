@@ -12,8 +12,8 @@ from .connectors.base import ConnectorError
 from .integration_service import initialize, operate, public_status
 from .products import product_label
 from .matching import search_suggestions
-from .catalog import search_catalog, use_directory_identity
-from .schemas import ProductSearchRequest, ProductIdentityRequest
+from .catalog import search_catalog, use_directory_identity, refresh_product, choose_store_product
+from .schemas import ProductSearchRequest, ProductIdentityRequest, ProductSelectionRequest
 from .schemas import HealthResponse, ScanRequest, ScanResponse, ShoppingItemResponse, StoreSearchRequest, StoreMatchRequest, VerificationRequest, NamedItemRequest, QuantityRequest
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -155,6 +155,23 @@ async def search_item_catalog(ean: str, payload: ProductSearchRequest):
 def set_item_identity(ean: str, payload: ProductIdentityRequest):
     try:
         use_directory_identity(ean, payload.code)
+    except ConnectorError as error:
+        raise HTTPException(status_code=404 if error.status == "not_found" else 409, detail=error.message) from error
+    return list_items()
+
+
+@app.post("/api/v1/items/{ean}/refresh")
+async def refresh_item(ean: str):
+    try:
+        return await refresh_product(ean)
+    except ConnectorError as error:
+        raise HTTPException(status_code=404 if error.status == "not_found" else 409, detail=error.message) from error
+
+
+@app.post("/api/v1/items/{ean}/select", response_model=list[ShoppingItemResponse])
+def select_item(ean: str, payload: ProductSelectionRequest):
+    try:
+        choose_store_product(ean,payload.source,payload.product_id)
     except ConnectorError as error:
         raise HTTPException(status_code=404 if error.status == "not_found" else 409, detail=error.message) from error
     return list_items()

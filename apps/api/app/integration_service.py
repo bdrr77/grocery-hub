@@ -54,7 +54,7 @@ def public_status():
     now = time.time()
     with engine.connect() as connection:
         states = {row["store"]: dict(row) for row in connection.execute(select(integrations)).mappings()}
-        jobs = [dict(row) for row in connection.execute(select(targets).where(targets.c.quantity > 0)).mappings()]
+        jobs = [dict(row) for row in connection.execute(select(targets)).mappings()]
         snapshots = {row["store"]: dict(row) for row in connection.execute(select(cart_snapshots)).mappings()}
         lookups = {(row["store"],row["ean"]):{key:row[key] for key in ("status","message","checked_at")} for row in connection.execute(select(ean_lookups)).mappings()}
     result = []
@@ -72,7 +72,7 @@ def public_status():
         result.append({
             "id": store, "name": NAMES[store], "status": state, "connected": state == "connected",
             "message": message, "configured": configured, "checked_at": checked or None,
-            "items": [{**{key: job[key] for key in ("ean", "quantity", "status", "message", "product_id", "product_name", "price_cents")}, **product_card(job, snapshots.get(store) if snapshots.get(store, {}).get("fingerprint") == fingerprint else None), "ean_lookup":lookups.get((store,job["ean"]))} for job in jobs if job["store"] == store],
+            "items": [{**{key: job[key] for key in ("ean", "quantity", "status", "message", "product_id", "product_name", "price_cents")}, **product_card(job, snapshots.get(store) if snapshots.get(store, {}).get("fingerprint") == fingerprint else None), "ean_lookup":lookups.get((store,job["ean"]))} for job in jobs if job["store"] == store and job["quantity"] > 0],
             "pricing":summarize(snapshots.get(store), [job for job in jobs if job["store"] == store], fingerprint, state == "connected", now),
         })
     return result
@@ -149,7 +149,9 @@ async def operate(store, action="sync", *, ean=None, query=None, product_id=None
                 adopt_product_name(connection, ean, product, store)
         elif action == "sync":
             await sync_targets(store, adapter, owner)
-        if action in {"sync", "connect", "verify-code", "refresh"}:
+        elif action == "resolve":
+            await sync_targets(store, adapter, owner, ean=ean)
+        if action in {"sync", "connect", "verify-code", "refresh", "resolve"}:
             snapshot = await adapter.get_cart_details()
             with engine.begin() as connection:
                 entry = insert_for(cart_snapshots).values(store=store, fingerprint=fingerprint, fetched_at=time.time(), data=snapshot)
@@ -178,10 +180,10 @@ async def operate(store, action="sync", *, ean=None, query=None, product_id=None
         save_state(store, owner, lease_owner="", lease_until=0)
 
 
-async def sync_targets(store, adapter, owner):
+async def sync_targets(store, adapter, owner, ean=None):
     with engine.connect() as connection:
         jobs = [dict(row) for row in connection.execute(select(targets).where(
-            targets.c.store == store, targets.c.status != "synced", targets.c.status != "unmatched", targets.c.retry_at <= time.time()
+            targets.c.store == store, targets.c.status != "synced", targets.c.status != "unmatched", targets.c.retry_at <= time.time(), *([targets.c.ean == ean] if ean else [])
         ).order_by(targets.c.ean).limit(10)).mappings()]
     for job in jobs:
         save_state(store, owner, lease_until=time.time() + 300)

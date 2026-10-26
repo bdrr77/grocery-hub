@@ -1,5 +1,5 @@
 """Scan receipts and list updates commit in one transaction."""
-from sqlalchemy import JSON, CheckConstraint, Column, Float, Integer, MetaData, String, Table, create_engine, select
+from sqlalchemy import JSON, CheckConstraint, Column, Float, Integer, MetaData, String, Table, create_engine, select, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -84,6 +84,7 @@ def insert_for(table):
 
 
 def enqueue(connection, ean, quantity, label):
+    connection.execute(delete(cart_snapshots))
     for store in STORES:
         entry = insert_for(targets).values(store=store, ean=ean, quantity=quantity, label=label)
         connection.execute(entry.on_conflict_do_update(

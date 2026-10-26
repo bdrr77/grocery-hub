@@ -6,7 +6,7 @@ import ProductSearch, { ShopBadge } from "./product-search";
 type Item = { ean: string; label: string; quantity: number; size?:string|null; source?:string|null };
 type Lookup = {status:string;message:string;checked_at:number};
 type SyncItem = { ean: string; quantity: number; status: string; message: string; product_id: string | null; product_name: string | null; price_cents: number | null; size?:string; unit_price_cents?:number|null; unit_price_unit?:string|null; ean_lookup?:Lookup|null };
-type Pricing = {fresh:boolean;fetched_at:number|null;list_complete:boolean;list_total_cents:number|null;known_list_total_cents:number|null;priced_items:number;item_count:number;missing_items:number;cart_total_cents:number|null;deposit_cents:number|null;fees_cents:number|null;discount_cents:number|null;other_cart_items:number|null};
+type Pricing = {updating?:boolean;fresh:boolean;fetched_at:number|null;list_complete:boolean;list_total_cents:number|null;known_list_total_cents:number|null;priced_items:number;item_count:number;missing_items:number;cart_total_cents:number|null;deposit_cents:number|null;fees_cents:number|null;discount_cents:number|null;other_cart_items:number|null};
 type Integration = { id: string; name: string; status: string; connected: boolean; configured: boolean; message: string; checked_at: number | null; items: SyncItem[]; pricing?:Pricing };
 
 const money = (value: number) => new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(value / 100);
@@ -89,20 +89,26 @@ export default function Home() {
   }
 
 
+  function markPricesUpdating() {
+    setConnections(current=>current.map(store=>({...store,pricing:store.pricing && store.connected ? {...store.pricing,updating:true,fresh:false,list_total_cents:null,known_list_total_cents:null,cart_total_cents:null,deposit_cents:null,fees_cents:null,discount_cents:null,other_cart_items:null}:store.pricing})));
+  }
+
   async function remove(ean: string) {
     setBusy(true); setError(""); setNotice("");
     try {
+      markPricesUpdating();
       await api<void>(`items/${ean}`, { method: "DELETE" });
       setItems(current => current.filter(item => item.ean !== ean));
       setNotice("Produit retiré de la liste. Retrait des paniers associés en attente.");
       void refreshConnections();
     } catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+    finally { setBusy(false); await refreshConnections(); }
   }
 
   async function quantity(item:Item, value:number) {
     setBusy(true); setError(""); setNotice("");
     try {
+      markPricesUpdating();
       setItems(await api<Item[]>(`items/${item.ean}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({quantity:value})}));
       setNotice("Quantité mise à jour. Synchronisation des paniers en attente.");
       await refreshConnections();
@@ -153,10 +159,10 @@ export default function Home() {
       <h2 id="comparison-title">Comparer mes courses</h2>
       <div className="comparison-grid">{connections.map(store=><article key={store.id}>
         <h3>{store.name}</h3>
-        <p>Ma sélection <strong>{store.pricing?.list_total_cents != null && store.pricing.item_count===items.length ? money(store.pricing.list_total_cents) : "À compléter"}</strong></p>
+        <p>Ma sélection <strong>{store.pricing?.updating ? <span className="shop-progress" role="status"><span className="loading-spinner" aria-hidden="true"/>Mise à jour…</span> : store.pricing?.list_total_cents != null && store.pricing.item_count===items.length ? money(store.pricing.list_total_cents) : "À compléter"}</strong></p>
         <small>{store.pricing?.priced_items || 0} / {items.length} produit(s) chiffré(s), quantités synchronisées.</small>
         {store.pricing?.known_list_total_cents != null && !store.pricing.list_complete && store.pricing.priced_items>0 && <small>Sous-total connu : {money(store.pricing.known_list_total_cents)}</small>}
-        <p>Panier du magasin <strong>{store.pricing?.cart_total_cents != null ? money(store.pricing.cart_total_cents) : "Indisponible"}</strong></p>
+        <p>Panier du magasin <strong>{store.pricing?.updating ? <span className="shop-progress" role="status"><span className="loading-spinner" aria-hidden="true"/>Mise à jour du panier…</span> : store.pricing?.cart_total_cents != null ? money(store.pricing.cart_total_cents) : "Indisponible"}</strong></p>
         {store.pricing?.deposit_cents != null && <small>Consignes : {money(store.pricing.deposit_cents)}</small>}
         {store.pricing?.fees_cents != null && <small>Frais signalés : {money(store.pricing.fees_cents)}</small>}
         {!!store.pricing?.discount_cents && <small>Remises signalées : {money(store.pricing.discount_cents)}</small>}
@@ -187,7 +193,7 @@ export default function Home() {
             {job?.unit_price_cents != null && <small>{money(job.unit_price_cents)} / {job.unit_price_unit}</small>}
           </div>;
         })}</div>
-        <ProductSearch ean={item.ean} label={item.label} matches={Object.fromEntries(connections.map(store=>[store.id,store.items.find(job=>job.ean===item.ean)?.product_id || null]))} onChange={async()=>{setItems(await api<Item[]>("items"));await refreshConnections();}}/>
+        <ProductSearch ean={item.ean} label={item.label} unresolved={(item.label.startsWith("EAN ") || (!item.source && item.ean.startsWith("n"))) && !connections.some(store=>store.items.some(job=>job.ean===item.ean && !!job.product_id))} pending={connections.some(store=>store.configured && ["connected","pending","busy"].includes(store.status) && store.items.some(job=>job.ean===item.ean && job.status==="queued"))} matches={Object.fromEntries(connections.map(store=>[store.id,store.items.find(job=>job.ean===item.ean)?.product_id || null]))} onChange={async()=>{setItems(await api<Item[]>("items"));await refreshConnections();}}/>
       </article>)}</div>
     </section>
     <footer>Les noms des produits sont recherchés dans <a href="https://world.openfoodfacts.org/" target="_blank" rel="noreferrer">Open Food Facts</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/">ODbL</a>). Un produit inconnu reste enregistré avec son EAN.</footer>

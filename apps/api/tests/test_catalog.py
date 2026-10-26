@@ -11,7 +11,7 @@ from app.connectors.base import ConnectorError
 from app.database import engine, product_facts, targets
 from app.integration_service import operate
 from app.products import _product_search
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 
 class CatalogTests(unittest.TestCase):
@@ -102,9 +102,99 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(result[0]["name"],"Barilla Lasagne")
             self.assertEqual(result[0]["size"],"500 g")
             self.assertIsNone(result[0]["price_cents"])
+            self.assertEqual(result[0]["brand"],"Barilla")
             _product_search("Lasagne",123)
             self.assertEqual(request.call_count,1)
         _product_search.cache_clear()
+
+    def test_selecting_off_replaces_ean_and_keeps_shopping_quantity(self):
+        self.add(barcode="00000000")
+        self.client.patch("/api/v1/items/00000000",json={"quantity":3})
+        with engine.begin() as connection:
+            connection.execute(product_facts.insert().values(ean="8076800376999",data={"name":"Barilla Lasagne","size":"500 g"},fetched_at=time.time()))
+        response=self.client.post("/api/v1/items/00000000/identity",json={"code":"8076800376999"})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json()[0]["ean"],"8076800376999")
+        self.assertEqual(response.json()[0]["quantity"],3)
+        with engine.connect() as connection:
+            self.assertFalse(connection.execute(select(targets).where(targets.c.ean=="00000000")).first())
+            self.assertEqual(len(connection.execute(select(targets).where(targets.c.ean=="8076800376999")).all()),2)
+
+    def test_store_result_rekeys_to_its_verified_ean(self):
+        self.add(barcode="00000000")
+        product={"id":"c1","name":"Lasagne","size":"500 g","eans":["8076800376999"],"price_cents":250}
+        with engine.begin() as connection:
+            connection.execute(update(targets).where(targets.c.store=="chronodrive").values(candidates=[product]))
+        result=self.client.post("/api/v1/items/00000000/select",json={"source":"chronodrive","product_id":"c1"})
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(result.json()[0]["ean"],"8076800376999")
+        with engine.connect() as connection:
+            target=connection.execute(select(targets).where(targets.c.store=="chronodrive",targets.c.ean=="8076800376999")).mappings().one()
+            self.assertEqual(target["product_id"],"c1")
+
+    def test_refresh_bypasses_negative_off_cache_and_resolves_connected_shop(self):
+        test_api.ShoppingListTests.configured_store(self)
+        with patch("app.main.product_label",return_value="EAN 3017620422003"):
+            self.add()
+        with patch("app.integration_service.adapter_for",return_value=test_api.FakeStore()):
+            asyncio.run(operate("picnic"))
+        with engine.begin() as connection:
+            connection.execute(product_facts.insert().values(ean="3017620422003",data={},fetched_at=time.time()))
+            connection.execute(update(targets).where(targets.c.store=="picnic").values(product_id=None,status="unmatched"))
+        details={"name":"Nutella","brand":"Ferrero","size":"400 g"}
+        with patch("app.catalog.product_details",return_value=details) as lookup,patch("app.integration_service.adapter_for",return_value=test_api.FakeStore()):
+            result=self.client.post("/api/v1/items/3017620422003/refresh",json={})
+        self.assertEqual(result.status_code,200)
+        lookup.assert_called_once_with("3017620422003")
+        self.assertEqual(self.client.get("/api/v1/items").json()[0]["label"],"Nutella")
+        with engine.connect() as connection:
+            target=connection.execute(select(targets).where(targets.c.store=="picnic")).mappings().one()
+            self.assertEqual(target["product_id"],"p1")
+            self.assertEqual(target["status"],"synced")
+
+    def test_refresh_tries_barcode_then_fresh_facts_then_automatic_name_search(self):
+        test_api.ShoppingListTests.configured_store(self)
+        self.add()
+        store=test_api.FakeStore()
+        store.matches=[]
+        with patch("app.integration_service.adapter_for",return_value=store):
+            asyncio.run(operate("picnic"))
+        calls=[]
+        async def barcode(ean):
+            calls.append(("ean",ean))
+            return []
+        def facts(ean):
+            calls.append(("off",ean))
+            return {"name":"Lasagne","brand":"Barilla","size":"500 g"}
+        async def search(query):
+            calls.append(("search",query))
+            return store.matches
+        store.search_by_ean=barcode
+        store.search=search
+        with patch("app.catalog.product_details",side_effect=facts),patch("app.integration_service.adapter_for",return_value=store):
+            result=self.client.post("/api/v1/items/3017620422003/refresh",json={})
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(calls,[("ean","3017620422003"),("off","3017620422003"),("search","Barilla Lasagne 500 g")])
+
+    def test_deletion_invalidates_snapshot_and_tracks_removal_until_confirmed(self):
+        from app.integration_service import public_status
+        test_api.ShoppingListTests.configured_store(self)
+        self.add()
+        store=test_api.FakeStore()
+        with patch("app.integration_service.adapter_for",return_value=store):
+            asyncio.run(operate("picnic"))
+            self.assertEqual(public_status()[0]["pricing"]["cart_total_cents"],1995)
+            self.client.delete("/api/v1/items/3017620422003")
+            status=public_status()[0]
+            self.assertEqual(status["items"],[])
+            self.assertTrue(status["pricing"]["updating"])
+            self.assertIsNone(status["pricing"]["cart_total_cents"])
+            asyncio.run(operate("picnic"))
+        status=public_status()[0]
+        self.assertFalse(status["pricing"]["updating"])
+        self.assertEqual(status["pricing"]["cart_total_cents"],1596)
+        self.assertEqual(status["pricing"]["list_total_cents"],0)
+        self.assertEqual(store.cart,{"unrelated":4})
 
 
 def tearDownModule():

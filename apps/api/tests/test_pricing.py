@@ -55,8 +55,29 @@ class PricingTests(unittest.TestCase):
             self.assertEqual(result["list_complete"],amount==0)
             self.assertEqual(result["list_total_cents"],amount)
 
-    def test_missing_native_total_is_unknown_and_empty_list_is_not_compared(self):
+    def test_empty_selection_is_zero_but_missing_native_total_is_unknown(self):
         self.snapshot["data"]["total_cents"] = None
         result = summarize(self.snapshot,[],"f",True,now=1010)
         self.assertIsNone(result["cart_total_cents"])
-        self.assertFalse(result["list_complete"])
+        self.assertTrue(result["list_complete"])
+        self.assertEqual(result["list_total_cents"],0)
+
+    def test_last_item_removal_hides_stale_basket_until_confirmed(self):
+        job={**self.job,"quantity":0,"status":"queued"}
+        result=summarize(self.snapshot,[job],"f",True,now=1010)
+        self.assertTrue(result["updating"])
+        self.assertIsNone(result["cart_total_cents"])
+        self.assertIsNone(result["other_cart_items"])
+        result=summarize(None,[{**job,"status":"synced","product_id":None}],"f",True,now=1010)
+        self.assertTrue(result["updating"])
+        self.snapshot["data"]={"lines":[],"total_cents":0}
+        result=summarize(self.snapshot,[{**job,"status":"synced","product_id":None}],"f",True,now=1010)
+        self.assertFalse(result["updating"])
+        self.assertEqual(result["cart_total_cents"],0)
+
+    def test_failed_removal_is_unavailable_not_an_endless_spinner(self):
+        result=summarize(None,[{**self.job,"quantity":0,"status":"quantity_mismatch"}],"f",True,now=1010)
+        self.assertFalse(result["updating"])
+        self.assertIsNone(result["cart_total_cents"])
+        result=summarize(None,[self.job,{**self.job,"quantity":0,"status":"quantity_mismatch"}],"f",True,now=1010)
+        self.assertFalse(result["updating"])
