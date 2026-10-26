@@ -282,6 +282,25 @@ class CatalogTests(unittest.TestCase):
             jobs=connection.execute(select(targets)).mappings().all()
         self.assertEqual({job["product_id"] for job in jobs},{"p2","c2"})
 
+    def test_named_addition_and_refresh_search_stores_without_off(self):
+        test_api.ShoppingListTests.configured_store(self)
+        item=self.client.post("/api/v1/items/named",json={"label":"mouchoirs","event_id":"named-search-1"}).json()[0]
+        store=test_api.FakeStore()
+        original=store.search
+        store.search=AsyncMock(side_effect=original)
+        with patch("app.integration_service.adapter_for",return_value=store),patch("app.matching.product_details") as off:
+            asyncio.run(operate("picnic"))
+        off.assert_not_called()
+        store.search.assert_awaited_once_with("mouchoirs")
+        result=self.client.get(f"/api/v1/items/{item['ean']}/equivalents").json()
+        self.assertEqual(result["results"][0]["offers"][0]["id"],"p1")
+        self.assertNotIn("p1",store.cart)
+        with patch("app.integration_service.adapter_for",return_value=store),patch("app.catalog.product_details") as off:
+            refreshed=self.client.post(f"/api/v1/items/{item['ean']}/refresh",json={})
+        self.assertEqual(refreshed.status_code,200)
+        off.assert_not_called()
+        self.assertEqual(refreshed.json()["results"][0]["offers"][0]["id"],"p1")
+
     def test_refresh_without_off_metadata_stops_and_clears_old_candidates(self):
         test_api.ShoppingListTests.configured_store(self)
         self.add()

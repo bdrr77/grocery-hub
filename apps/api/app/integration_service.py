@@ -226,10 +226,10 @@ async def sync_targets(store, adapter, owner, ean=None, fallback=True):
             values = {"status":error.status,"message":error.message,"retry_at":time.time()+300}
             if error.status == "unmatched" and not job["product_id"]:
                 values["candidates"] = []
-            if fallback and error.status == "unmatched" and job["quantity"] > 0 and job["ean"].isdigit() and not job["product_id"]:
+            if fallback and error.status == "unmatched" and job["quantity"] > 0 and not job["product_id"]:
                 from .matching import automatic_equivalents
                 try:
-                    values["candidates"] = await automatic_equivalents(job["ean"],adapter)
+                    values["candidates"] = await automatic_equivalents(job["ean"],adapter) if job["ean"].isdigit() else [product.public() for product in await adapter.search(job["label"])]
                 except ConnectorError as fallback_error:
                     if fallback_error.status in {"auth_error","otp_required","access_denied","rate_limited"}:
                         raise

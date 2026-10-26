@@ -69,6 +69,14 @@ test("French accounts receiving a Fusion search page can still search", async ()
   finally {globalThis.fetch = original;}
 });
 
+test("Fusion search accepts the documented layout envelope and nested PML selling units",async()=>{
+  const original=globalThis.fetch;
+  const tile={type:"PML",content:{type:"SELLING_UNIT_TILE",sellingUnit:{id:"s456",name:"Mouchoirs",display_price:199,unit_quantity:"100 pièces",max_count:10}}};
+  globalThis.fetch=async()=>Response.json({script:{},layout:{id:"search-page-results",body:{type:"STATE_BOUNDARY",child:{type:"BLOCK",children:[tile,tile]}}}});
+  try{assert.deepEqual(await searchProducts({...input,query:"mouchoirs"},Client),[{id:"s456",name:"Mouchoirs",eans:[],price_cents:199,size:"100 pièces"}]);}
+  finally{globalThis.fetch=original;}
+});
+
 test("upstream search failure identifies its step without returning response bodies", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => new Response("private-token private-password",{status:400});

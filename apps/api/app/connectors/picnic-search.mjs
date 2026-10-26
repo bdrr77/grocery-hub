@@ -29,11 +29,12 @@ function* objects(value) {
 }
 
 export function fusionProducts(page) {
-  if (!page || typeof page!=="object" || !page.body) throw Object.assign(new Error("Invalid Fusion page"),{step:"search-format"});
+  const body = page?.layout?.body ?? page?.body;
+  if (!body || typeof body!=="object") throw Object.assign(new Error("Invalid Fusion page"),{step:"search-format"});
   const products = new Map();
-  for (const node of objects(page.body)) {
+  for (const node of objects(body)) {
     const item = node.type==="SELLING_UNIT_TILE" ? node.sellingUnit : null;
-    if (!item?.id || !item.name || item.max_count===0) continue;
+    if (!item?.id || !item.name || item.max_count===0 || item.decorators?.some(decorator=>decorator.type==="UNAVAILABLE")) continue;
     products.set(String(item.id), {id:String(item.id),name:item.name,eans:[],price_cents:Number.isInteger(item.display_price) ? item.display_price : null,size:item.unit_quantity || "",...(typeof item.brand==="string" && item.brand ? {brand:item.brand}:{})});
   }
   return [...products.values()].slice(0,30);

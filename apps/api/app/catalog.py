@@ -133,6 +133,18 @@ async def refresh_product(ean):
     with engine.begin() as connection:
         enqueue(connection,ean,item["quantity"],item["label"])
     messages = []
+    if not ean.isdigit():
+        sources = []
+        async def search_name(store):
+            try:
+                products = await operate(store["id"],"search",ean=ean,query=item["label"][:200])
+                sources.append((store["id"],products))
+                with engine.begin() as connection:
+                    connection.execute(update(targets).where(targets.c.ean==ean,targets.c.store==store["id"],targets.c.product_id.is_(None),targets.c.quantity>0).values(status="unmatched"))
+            except ConnectorError:
+                messages.append({"source":store["id"],"name":store["name"],"message":"Recherche du magasin indisponible. Réessayez."})
+        await asyncio.gather(*(search_name(store) for store in stores))
+        return {"results":group_results(sources),"messages":messages}
     async def resolve_barcode(store):
         try:
             await operate(store["id"],"resolve",ean=ean)

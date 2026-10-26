@@ -34,6 +34,8 @@ export default function ProductSearch({ean,label,matches,unresolved,pending,onCh
   const last = useRef("");
   const request = useRef(false);
   const field = useRef<HTMLInputElement>(null);
+  const resultsDialog = useRef<HTMLDialogElement>(null);
+  const allResultsButton = useRef<HTMLButtonElement>(null);
   const loadedSuggestions = useRef<string|null>(null);
   latest.current = query.trim();
 
@@ -76,6 +78,7 @@ export default function ProductSearch({ean,label,matches,unresolved,pending,onCh
         await post(`items/${ean}/select`,{source:offer.source,product_id:offer.id});
       }
       await onChange();
+      resultsDialog.current?.close();
       setOpen(false);setActivated(false);
       if(fullPage)window.location.assign("/");
     } catch(e) {setError((e as Error).message);}
@@ -93,6 +96,19 @@ export default function ProductSearch({ean,label,matches,unresolved,pending,onCh
     } catch(e) {setError((e as Error).message);}
     finally {setRefreshing(false);}
   }
+  const renderResults = (all:boolean) => <ul aria-label="Produits trouvés">{(all?data!.results:data!.results.slice(0,10)).map((result,index)=><li key={`${result.codes.join("-")}-${index}`}>
+        <strong>{result.name}</strong>{result.brand && <span className="result-brand">{result.brand}</span>}{result.size && <span className="result-size">{result.size}</span>}
+        <div className="result-offers">{result.offers.map(offer=>{
+          const selected=offer.source!=="openfoodfacts" && matches[offer.source]===offer.id;
+          return <button key={`${offer.source}/${offer.id}`} type="button" className={`offer-choice${selected?" selected":""}`} disabled={!!choosing || refreshing || selected || (offer.source!=="openfoodfacts" && !!matches[offer.source])} onClick={()=>void choose(offer)} aria-label={`Choisir ${offer.name} — ${names[offer.source]}`}>
+            <ShopBadge source={offer.source}/><span className="offer-price">{offer.price_cents!=null?money(offer.price_cents):offer.source==="openfoodfacts"?"Choisir ce produit":"Prix indisponible"}</span>
+            {offer.unit_price_cents!=null && <small>{money(offer.unit_price_cents)} / {offer.unit_price_unit}</small>}
+            {offer.size!==result.size && offer.size && <small>{offer.size}</small>}
+            {offer.name!==result.name && <small>{offer.name}</small>}
+            {selected && <small>✓ Dans votre liste</small>}
+          </button>;
+        })}</div>
+      </li>)}</ul>;
   const showing = open && (!!data || query.trim().length>=2);
   return <div className="card-search" onKeyDown={event=>{if(event.key==="Escape"){field.current?.focus();setOpen(false);}}}>
     {!fullPage && <div className="card-tools"><button type="button" disabled={pending || refreshing || searching || !!choosing} onClick={()=>void refreshCard()}>{refreshing?<><span className="loading-spinner" aria-hidden="true"/> Actualisation…</>:"Actualiser ce produit"}</button>{unresolved && !pending && !activated && <button type="button" onClick={()=>{setActivated(true);setOpen(true);setTimeout(()=>field.current?.focus(),0);}}>Rechercher un produit</button>}</div>}
@@ -106,20 +122,13 @@ export default function ProductSearch({ean,label,matches,unresolved,pending,onCh
       <div className="search-dropdown-heading"><span>Résultats</span><button type="button" onClick={()=>setOpen(false)} aria-label="Fermer les résultats">×</button></div>
       {searching && <p className="shop-progress" role="status"><span className="loading-spinner" aria-hidden="true"/>Recherche dans vos magasins…</p>}
       {error && <p className="search-feedback" role="alert">{error}</p>}
-      {!!data?.results.length && <ul aria-label="Produits trouvés">{(fullPage?data.results:data.results.slice(0,10)).map((result,index)=><li key={`${result.codes.join("-")}-${index}`}>
-        <strong>{result.name}</strong>{result.brand && <span className="result-brand">{result.brand}</span>}{result.size && <span className="result-size">{result.size}</span>}
-        <div className="result-offers">{result.offers.map(offer=>{
-          const selected=offer.source!=="openfoodfacts" && matches[offer.source]===offer.id;
-          return <button key={`${offer.source}/${offer.id}`} type="button" className={`offer-choice${selected?" selected":""}`} disabled={!!choosing || refreshing || selected || (offer.source!=="openfoodfacts" && !!matches[offer.source])} onClick={()=>void choose(offer)} aria-label={`Choisir ${offer.name} — ${names[offer.source]}`}>
-            <ShopBadge source={offer.source}/><span className="offer-price">{offer.price_cents!=null?money(offer.price_cents):offer.source==="openfoodfacts"?"Choisir ce produit":"Prix indisponible"}</span>
-            {offer.unit_price_cents!=null && <small>{money(offer.unit_price_cents)} / {offer.unit_price_unit}</small>}
-            {offer.size!==result.size && offer.size && <small>{offer.size}</small>}
-            {offer.name!==result.name && <small>{offer.name}</small>}
-            {selected && <small>✓ Dans votre liste</small>}
-          </button>;
-        })}</div>
-      </li>)}</ul>}
-      {!fullPage && !!data?.results.length && <p><a href={query ? `/search?ean=${encodeURIComponent(ean)}&q=${encodeURIComponent(query)}` : `/search?ean=${encodeURIComponent(ean)}&saved=1`} target="_blank" rel="noopener noreferrer">Voir tous les résultats dans une nouvelle fenêtre ({data.results.length}) ↗</a></p>}
+      {!!data?.results.length && renderResults(false)}
+      {!!data && data.results.length>10 && <p><button ref={allResultsButton} type="button" onClick={()=>resultsDialog.current?.showModal()}>Voir tous les résultats ({data.results.length})</button></p>}
+      {!!data && data.results.length>10 && <dialog ref={resultsDialog} className="results-dialog" aria-labelledby={`all-results-${ean}`} onKeyDown={event=>{if(event.key==="Escape")event.stopPropagation();}} onClose={()=>allResultsButton.current?.focus()}>
+        <div className="connection-heading"><h2 id={`all-results-${ean}`}>Tous les résultats ({data.results.length})</h2><button type="button" onClick={()=>resultsDialog.current?.close()}>Fermer</button></div>
+        {error && <p role="alert">{error}</p>}
+        <div className="search-dropdown">{renderResults(true)}</div>
+      </dialog>}
       {data && !data.results.length && <p>Aucun produit trouvé. Essayez un autre nom ou une marque.</p>}
       {data?.messages.map(message=><p className="search-feedback" key={message.source}><ShopBadge source={message.source}/> {message.message}</p>)}
       <p className="search-help">Choisissez l’équivalent et son format. La quantité à acheter est conservée ; le code-barres est remplacé si le magasin le fournit.</p>

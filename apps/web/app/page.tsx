@@ -187,7 +187,7 @@ export default function Home() {
         <div className="item-stores">{connections.map(store => {
           const job = store.items.find(job => job.ean === item.ean);
           return <div key={store.id}><ShopBadge source={store.id}/>{job?.product_name && <span>{job.product_name}</span>}
-            {store.configured && ["connected","pending","busy"].includes(store.status) && (!job || job.status==="queued") && (job?.product_id || /^\d+$/.test(item.ean)) ? <small className="shop-progress" role="status"><span className="loading-spinner" aria-hidden="true"/>{job?.product_id ? "Mise à jour du panier et du prix…" : "Recherche du produit et du prix…"}</small> : <small>{!store.connected ? "Magasin déconnecté" : !job?.product_id ? "Recherchez un produit ci-dessous pour ce magasin." : job.status==="synced" ? "Dans votre panier" : "Mise à jour impossible. Réessayez depuis le magasin."}</small>}
+            {store.configured && ["connected","pending","busy"].includes(store.status) && (!job || job.status==="queued") ? <small className="shop-progress" role="status"><span className="loading-spinner" aria-hidden="true"/>{job?.product_id ? "Mise à jour du panier et du prix…" : "Recherche du produit et du prix…"}</small> : <small>{!store.connected ? "Magasin déconnecté" : !job?.product_id ? "Recherchez un produit ci-dessous pour ce magasin." : job.status==="synced" ? "Dans votre panier" : "Mise à jour impossible. Réessayez depuis le magasin."}</small>}
             {job?.size && <small>Format : {job.size}</small>}
             {job?.price_cents != null && <small>Prix observé : {money(job.price_cents)} / article</small>}
             {job?.unit_price_cents != null && <small>{money(job.unit_price_cents)} / {job.unit_price_unit}</small>}

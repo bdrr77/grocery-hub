@@ -86,7 +86,9 @@ result is silently added: check the product and format and click **Associer**. T
 choice is saved for later scans. Chronodrive resolves EANs through its own catalog.
 Open Food Facts metadata is cached for a day; negative lookups are cached for 15 minutes.
 
-You can add a product by name without an EAN and select a product in each store. The
+You can add a product by name without an EAN; the worker automatically searches that
+name in connected shops and opens the saved candidates. Card refresh repeats this
+text search without consulting OFF or treating the internal item key as a barcode. The
 plus/minus controls update the shared list quantity and queue the associated cart
 updates. Named items use an internal key in the existing `ean` column and are never
 sent to a store as barcodes.
@@ -124,8 +126,9 @@ sync is required. Order detection and bidirectional cart import remain future wo
 
 Unresolved cards reveal inline name search on request after automatic lookups finish.
 Results sharing a verified barcode appear in one row with brand, coloured source
-badges, store prices and pack sizes. Cards display up to ten rows; a separate browser
-tab shows all returned results and supports selection. Similar names never authorize
+badges, store prices and pack sizes. Cards display up to ten rows. Only when more than
+ten results exist, a button opens all results in a modal dialog inside the same page,
+with the same selection controls, keyboard closing and focus return. Similar names never authorize
 a cart association. Selecting a result replaces an unresolved item's EAN, name and
 pack while retaining its shopping quantity, and queues store matching. Store results
 without a barcode can still be selected explicitly: the original EAN is retained and
@@ -146,7 +149,7 @@ otherwise fetches it, and saves name-search candidates without adding them to a 
 The card reads these saved candidates and opens its list automatically when the worker
 finishes. It stops if OFF has no metadata. Searches progressively drop brand/pack
 constraints, try a generic description when provided and finally a product-name keyword
-to expose equivalents. Full-results tabs reuse the saved automatic candidates.
+to expose equivalents. The full-results dialog reuses the current candidates.
 
 Barcode lookup requests `product_type=all`, following OFF's redirects to Open Beauty
 Facts, Open Pet Food Facts and Open Products Facts. A beauty-classified product must
@@ -180,6 +183,9 @@ a controlled step name (page, action, bootstrap, client component or product she
 and the upstream HTTP status when available. Raw response bodies, URLs, credentials
 and tokens are not included in errors. A catalog failure does not disconnect an
 otherwise authenticated account. The logs include the same safe step/status fields.
+Fusion parsing accepts the documented `layout.body` envelope and the bare `body`
+layout. It traverses nested PML selling-unit tiles and excludes unavailable products;
+the full envelope has a regression test through the pinned client's real HTTP path.
 Logs also include an allowlisted `reason` (missing client configuration, missing action,
 unsupported action response, RSC cycle or decoder/type error); no raw exception text is
 logged. The bridge adds the configured app/device headers to the client's internal
