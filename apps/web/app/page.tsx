@@ -5,7 +5,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 type Item = { ean: string; label: string; quantity: number };
 type Lookup = {status:string;message:string;checked_at:number};
 type Suggestion = {source:"chronodrive"|"openfoodfacts"|"user";query:string;name:string;size:string};
-type SyncItem = { ean: string; quantity: number; status: string; message: string; product_id: string | null; product_name: string | null; price_cents: number | null; ean_lookup?:Lookup|null };
+type SyncItem = { ean: string; quantity: number; status: string; message: string; product_id: string | null; product_name: string | null; price_cents: number | null; size?:string; unit_price_cents?:number|null; unit_price_unit?:string|null; ean_lookup?:Lookup|null };
 type Pricing = {fresh:boolean;fetched_at:number|null;list_complete:boolean;list_total_cents:number|null;known_list_total_cents:number|null;priced_items:number;item_count:number;missing_items:number;cart_total_cents:number|null;deposit_cents:number|null;fees_cents:number|null;discount_cents:number|null;other_cart_items:number|null};
 type Integration = { id: string; name: string; status: string; connected: boolean; configured: boolean; message: string; checked_at: number | null; items: SyncItem[]; pricing?:Pricing };
 type Product = { id: string; name: string; price_cents: number | null; size: string; eans: string[] };
@@ -226,7 +226,9 @@ export default function Home() {
           return <div key={store.id}><strong>{store.name}</strong>{job?.product_name && <span>{job.product_name}</span>}
             <small>{!store.connected ? store.message : job?.message || "En attente de synchronisation."}</small>
             {job?.ean_lookup && !job.product_id && <small>{job.ean_lookup.message}</small>}
-            {job?.price_cents != null && <small>Prix observé : {money(job.price_cents)} / unité</small>}
+            {job?.size && <small>Format : {job.size}</small>}
+            {job?.price_cents != null && <small>Prix observé : {money(job.price_cents)} / article</small>}
+            {job?.unit_price_cents != null && <small>{money(job.unit_price_cents)} / {job.unit_price_unit}</small>}
             {store.connected && !job?.product_id && <button type="button" disabled={!!storeBusy} onClick={()=>void openPicker(store.id,item)}>Choisir chez {store.name}</button>}
           </div>;
         })}</div>

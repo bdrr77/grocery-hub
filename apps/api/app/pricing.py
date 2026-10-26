@@ -1,5 +1,31 @@
 """Compare only current, verified quantities; never treat unknown prices as zero."""
 import time
+import re
+from decimal import Decimal, ROUND_HALF_UP
+
+
+def pack_pricing(size, price_cents):
+    """Only normalize unambiguous pack labels; shopping quantity is independent."""
+    result = {"size": size or "", "unit_price_cents": None, "unit_price_unit": None}
+    label = (size or "").lower().strip().replace("\u00a0", " ")
+    label = re.sub(r"^(?:(?:le|la|les)\s+)?(?:pot|bouteille|paquet|boîte|boite|sachet|barquette|lot)\s+de\s+", "", label)
+    match = re.fullmatch(r"(?:(\d+)\s*[x×*]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|g|mg|ml|cl|dl|l|pièces?|pieces?|unités?|unites?|pcs?|œufs|oeufs)", label)
+    if not match or not isinstance(price_cents, int) or price_cents < 0:
+        return result
+    count, amount, unit = match.groups()
+    quantity = Decimal(count or "1") * Decimal(amount.replace(",", "."))
+    factors = {"kg": ("kg", "1"), "g": ("kg", ".001"), "mg": ("kg", ".000001"), "l": ("L", "1"), "dl": ("L", ".1"), "cl": ("L", ".01"), "ml": ("L", ".001")}
+    basis, factor = factors.get(unit, ("pièce", "1"))
+    quantity *= Decimal(factor)
+    if quantity > 0:
+        result.update(unit_price_cents=int((Decimal(price_cents) / quantity).quantize(Decimal("1"), rounding=ROUND_HALF_UP)), unit_price_unit=basis)
+    return result
+
+
+def product_card(job, snapshot):
+    product = next((p for p in job.get("candidates", []) if p["id"] == job["product_id"]), {})
+    line = next((p for p in (snapshot or {}).get("data", {}).get("lines", []) if p["id"] == job["product_id"]), {})
+    return pack_pricing(line.get("size") or product.get("size", ""), job["price_cents"])
 
 
 def summarize(snapshot, jobs, fingerprint, connected, now=None):

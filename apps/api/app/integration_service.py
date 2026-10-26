@@ -11,7 +11,7 @@ from .connectors.base import ConnectorError
 from .connectors.chronodrive import ChronodriveAdapter
 from .connectors.picnic import PicnicAdapter
 from .database import STORES, cart_snapshots, ean_lookups, engine, insert_for, integrations, items, targets
-from .pricing import summarize
+from .pricing import summarize, product_card
 
 NAMES = {"picnic": "Picnic", "chronodrive": "Chronodrive"}
 
@@ -63,7 +63,7 @@ def public_status():
         result.append({
             "id": store, "name": NAMES[store], "status": state, "connected": state == "connected",
             "message": message, "configured": configured, "checked_at": checked or None,
-            "items": [{**{key: job[key] for key in ("ean", "quantity", "status", "message", "product_id", "product_name", "price_cents")},"ean_lookup":lookups.get((store,job["ean"]))} for job in jobs if job["store"] == store],
+            "items": [{**{key: job[key] for key in ("ean", "quantity", "status", "message", "product_id", "product_name", "price_cents")}, **product_card(job, snapshots.get(store) if snapshots.get(store, {}).get("fingerprint") == fingerprint else None), "ean_lookup":lookups.get((store,job["ean"]))} for job in jobs if job["store"] == store],
             "pricing":summarize(snapshots.get(store), [job for job in jobs if job["store"] == store], fingerprint, state == "connected", now),
         })
     return result
@@ -195,7 +195,7 @@ async def sync_targets(store, adapter, owner):
                     conflict = connection.execute(select(targets.c.ean).where(targets.c.store == store, targets.c.product_id == product.id, targets.c.ean != job["ean"])).first()
                     if conflict:
                         raise ConnectorError("unmatched", "Ce produit magasin est déjà associé à un autre EAN.")
-                    saved = connection.execute(update(targets).where(*condition).values(product_id=product.id, product_name=product.name, price_cents=product.price_cents))
+                    saved = connection.execute(update(targets).where(*condition).values(product_id=product.id, product_name=product.name, price_cents=product.price_cents, candidates=[product.public()]))
                     if not saved.rowcount:
                         continue
                 job["product_id"] = product.id
