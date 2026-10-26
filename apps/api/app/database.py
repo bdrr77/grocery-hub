@@ -56,6 +56,20 @@ cart_snapshots = Table(
     Column("fetched_at", Float, nullable=False),
     Column("data", JSON, nullable=False),
 )
+ean_lookups = Table(
+    "store_ean_lookups", metadata,
+    Column("store", String(32), primary_key=True),
+    Column("ean", String(32), primary_key=True),
+    Column("status", String(32), nullable=False),
+    Column("message", String(500), nullable=False),
+    Column("checked_at", Float, nullable=False),
+)
+product_facts = Table(
+    "product_facts", metadata,
+    Column("ean", String(32), primary_key=True),
+    Column("data", JSON, nullable=False),
+    Column("fetched_at", Float, nullable=False),
+)
 
 
 def insert_for(table):

@@ -3,12 +3,52 @@ import { pathToFileURL } from "node:url";
 
 // Picnic's search uses React Server Components and dynamically discovered server actions.
 // Delegate that protocol to the maintained client instead of guessing an endpoint.
+function createClient(input, Client) {
+  const client = new Client({countryCode:input.country,apiVersion:input.version,authKey:input.token,deviceId:input.device,agent:input.agent});
+  if (typeof client.sendRequestWithHeaders === "function") {
+    const original = client.sendRequestWithHeaders.bind(client);
+    client.sendRequestWithHeaders = async (...args) => {
+      try {return await original(...args);}
+      catch(error) {
+        const path = String(args[1]);
+        error.step = path.includes("/pages/action/") ? "search-action" : path.includes("search-page-results") ? "search-page" : path.endsWith("/bootstrap") ? "bootstrap" : path.endsWith(".script.bundle") ? "client-chunk" : path.includes("product-details-page-root") ? "product-page" : undefined;
+        throw error;
+      }
+    };
+  }
+  return client;
+}
+
+function* objects(value) {
+  if (!value || typeof value!=="object") return;
+  if (!Array.isArray(value)) yield value;
+  for (const child of Object.values(value)) yield* objects(child);
+}
+
+export function fusionProducts(page) {
+  if (!page || typeof page!=="object" || !page.body) throw Object.assign(new Error("Invalid Fusion page"),{step:"search-format"});
+  const products = new Map();
+  for (const node of objects(page.body)) {
+    const item = node.type==="SELLING_UNIT_TILE" ? node.sellingUnit : null;
+    if (!item?.id || !item.name || item.max_count===0) continue;
+    products.set(String(item.id), {id:String(item.id),name:item.name,eans:[],price_cents:Number.isInteger(item.display_price) ? item.display_price : null,size:item.unit_quantity || ""});
+  }
+  return [...products.values()].slice(0,30);
+}
+
 export async function searchProducts(input, Client) {
-  const client = new Client({
-    countryCode: input.country, apiVersion: input.version, authKey: input.token,
-    deviceId: input.device, agent: input.agent,
-  });
-  const results = await client.catalog.getSearchResults(input.query);
+  const client = createClient(input,Client);
+  let results;
+  try {results = await client.catalog.getSearchResults(input.query);}
+  catch(error) {
+    // Accounts/countries can still receive JSON/PML rather than RSC for this page.
+    if (error.receivedFormat==="fusion" && Client.isUnexpectedPageFormatError?.(error)) {
+      const page = await client.app.getPage(`search-page-results?search_term=${encodeURIComponent(input.query)}`);
+      if (page.format==="fusion") return fusionProducts(page.page);
+    }
+    if (!error.step) error.step = error.message==="The search page has no search parameters" ? "search-parameters" : error.message==="The search page has no fetchSearchResults action" ? "search-action-discovery" : "search-format";
+    throw error;
+  }
   if (!results || !Object.hasOwn(results, "products")) throw new Error("Unexpected search format");
   if (results.products === null) return [];
   if (!Array.isArray(results.products.sections)) throw new Error("Unexpected search sections");
@@ -50,7 +90,7 @@ export function snapshotFromCart(raw, cart) {
 
 export async function execute(input, Client) {
   if (input.action === "search") return {data:await searchProducts(input,Client)};
-  const client = new Client({countryCode:input.country,apiVersion:input.version,authKey:input.token,deviceId:input.device,agent:input.agent});
+  const client = createClient(input,Client);
   let otpRequired = !!input.otp_required;
   // Capture the raw cart alongside the package normalizer without exposing private fields.
   async function readCart() {
@@ -81,6 +121,17 @@ export async function execute(input, Client) {
     case "send-code": await client.auth.generate2FACode("SMS"); break;
     case "verify-code": await client.auth.verify2FACode(input.code); otpRequired = false; break;
     case "cart": data = await readCart(); break;
+    case "product": {
+      try {
+        const product = await client.catalog.getProduct(input.product_id);
+        data = product.maxCount===0 ? null : {id:product.id,name:product.name,eans:[],price_cents:Number.isInteger(product.displayPrice) ? product.displayPrice : null,size:product.unitQuantity || ""};
+        if (data && (!data.id || !data.name)) throw Object.assign(new Error("Invalid product"),{step:"product-page"});
+      } catch(error) {
+        if (error.status===404 || Client.isProductNotFoundError?.(error)) data = null;
+        else throw error;
+      }
+      break;
+    }
     case "set-quantity": {
       const before = await readCart();
       const current = before.lines.filter(line=>line.id===input.product_id).reduce((sum,line)=>sum+line.quantity,0);
@@ -97,6 +148,11 @@ export async function execute(input, Client) {
   return {data,session:{token:client.authKey,otp_required:otpRequired}};
 }
 
+export function failureDetails(error) {
+  const stages = new Set(["search-page","search-action","bootstrap","client-chunk","search-format","product-page","search-parameters","search-action-discovery"]);
+  return {error:"request_failed",http_status:Number.isInteger(error?.status) ? error.status : null,step:stages.has(error?.step) ? error.step : null,received_format:["fusion","rsc"].includes(error?.receivedFormat) ? error.receivedFormat : null,code:error?.code==="QUANTITY_MISMATCH" ? error.code : null};
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     let text = "";
@@ -106,7 +162,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.stdout.write(JSON.stringify(await execute(JSON.parse(text), library.default || library)));
   } catch (error) {
     // Upstream errors may contain tokens/PII. Never forward their text to logs or UI.
-    process.stdout.write(JSON.stringify({error:"request_failed",http_status:Number.isInteger(error?.status) ? error.status : null,code:error?.code==="QUANTITY_MISMATCH" ? error.code : null}));
+    process.stdout.write(JSON.stringify(failureDetails(error)));
     process.exitCode = 1;
   }
 }

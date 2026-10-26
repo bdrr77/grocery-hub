@@ -8,6 +8,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const allowed = (route === "items" && ["GET", "POST"].includes(request.method)) ||
     (route === "integrations" && request.method === "GET") ||
     (route === "items/named" && request.method === "POST") ||
+    (/^items\/[A-Za-z0-9_-]{8,32}\/search-suggestions$/.test(route) && request.method === "GET") ||
     (/^integrations\/(picnic|chronodrive)\/(connect|sync|search|match|refresh)$/.test(route) && request.method === "POST") ||
     (/^integrations\/picnic\/(send-code|verify-code)$/.test(route) && request.method === "POST") ||
     (/^items\/[A-Za-z0-9_-]{8,32}$/.test(route) && ["DELETE", "PATCH"].includes(request.method));

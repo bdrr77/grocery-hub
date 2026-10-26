@@ -68,11 +68,23 @@ Existing list items are queued when the updated API starts. New scans, repeated 
 and removals atomically update the per-store desired quantity. The worker polls every
 `CONNECTOR_POLL_SECONDS` (default 30) and handles up to ten pending items per store/pass.
 
-Only one exact EAN match is accepted automatically. A name-only result is never silently
-chosen. Picnic's modern catalog does not expose verified EAN metadata: use
-**Choisir chez Picnic**, search by product name, check the size and price, and click
-**Associer**. The selected product is saved for subsequent scans. Chronodrive returns
-EANs in its product catalog and can usually resolve these automatically.
+Only one exact EAN match is accepted automatically. Picnic EANs are resolved through
+the public regional QR/GTIN service, then the resulting product ID is verified through
+the account's catalog. The anonymous resolver follows only approved Picnic hosts and
+does not receive account tokens. A resolved ID does not guarantee availability for
+every account. The UI distinguishes an unrecognized EAN, an unavailable product sheet,
+and a resolver error. Previously skipped EANs are retried once after this update.
+
+When an EAN cannot be matched, **Choisir chez Picnic** prepares searches in this order:
+
+1. The associated Chronodrive product title and pack size (e.g. `Nutella 400 g`).
+2. Open Food Facts name/brand and pack size if the first search returns no products.
+3. An editable user search when neither source finds a suitable product.
+
+Pack size is separate from the number of units on the shopping list. No name-based
+result is silently added: check the product and format and click **Associer**. The
+choice is saved for later scans. Chronodrive resolves EANs through its own catalog.
+Open Food Facts metadata is cached for a day; negative lookups are cached for 15 minutes.
 
 You can add a product by name without an EAN and select a product in each store. The
 plus/minus controls update the shared list quantity and queue the associated cart
@@ -120,6 +132,13 @@ Both integrations use unofficial web/mobile APIs and may require adjustment when
 change their protocols. Tests use mocked HTTP responses and a temporary SQLite database;
 they do not authenticate to real accounts. Set `TEST_DATABASE_URL` to a dedicated test
 PostgreSQL database to exercise production persistence. Do not point tests at production.
+
+Picnic search supports both RSC and JSON/PML (Fusion) pages. An upstream catalog or
+parsing error is returned as HTTP 502 rather than a misleading HTTP 400, and includes
+a controlled step name (page, action, bootstrap, client component or product sheet)
+and the upstream HTTP status when available. Raw response bodies, URLs, credentials
+and tokens are not included in errors. A catalog failure does not disconnect an
+otherwise authenticated account. The logs include the same safe step/status fields.
 
 Protocol sources used for implementation:
 

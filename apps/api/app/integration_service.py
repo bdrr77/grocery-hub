@@ -10,7 +10,7 @@ from .config import settings
 from .connectors.base import ConnectorError
 from .connectors.chronodrive import ChronodriveAdapter
 from .connectors.picnic import PicnicAdapter
-from .database import STORES, cart_snapshots, engine, insert_for, integrations, items, targets
+from .database import STORES, cart_snapshots, ean_lookups, engine, insert_for, integrations, items, targets
 from .pricing import summarize
 
 NAMES = {"picnic": "Picnic", "chronodrive": "Chronodrive"}
@@ -34,6 +34,11 @@ def initialize():
             connection.execute(insert_for(integrations).values(store=store).on_conflict_do_nothing())
             for item in connection.execute(select(items)).mappings():
                 connection.execute(insert_for(targets).values(store=store, **dict(item)).on_conflict_do_nothing())
+                # Older releases deliberately skipped Picnic EANs. Try those once after upgrade.
+                if store == "picnic" and item["ean"].isdigit():
+                    attempted = connection.execute(select(ean_lookups.c.ean).where(ean_lookups.c.store == store, ean_lookups.c.ean == item["ean"])).first()
+                    if not attempted:
+                        connection.execute(update(targets).where(targets.c.store == store, targets.c.ean == item["ean"], targets.c.status == "unmatched").values(status="queued", retry_at=0))
 
 
 def public_status():
@@ -42,6 +47,7 @@ def public_status():
         states = {row["store"]: dict(row) for row in connection.execute(select(integrations)).mappings()}
         jobs = [dict(row) for row in connection.execute(select(targets).where(targets.c.quantity > 0)).mappings()]
         snapshots = {row["store"]: dict(row) for row in connection.execute(select(cart_snapshots)).mappings()}
+        lookups = {(row["store"],row["ean"]):{key:row[key] for key in ("status","message","checked_at")} for row in connection.execute(select(ean_lookups)).mappings()}
     result = []
     for store in STORES:
         configured, fingerprint, setup_message = configuration(store)
@@ -57,7 +63,7 @@ def public_status():
         result.append({
             "id": store, "name": NAMES[store], "status": state, "connected": state == "connected",
             "message": message, "configured": configured, "checked_at": checked or None,
-            "items": [{key: job[key] for key in ("ean", "quantity", "status", "message", "product_id", "product_name", "price_cents")} for job in jobs if job["store"] == store],
+            "items": [{**{key: job[key] for key in ("ean", "quantity", "status", "message", "product_id", "product_name", "price_cents")},"ean_lookup":lookups.get((store,job["ean"]))} for job in jobs if job["store"] == store],
             "pricing":summarize(snapshots.get(store), [job for job in jobs if job["store"] == store], fingerprint, state == "connected", now),
         })
     return result
@@ -174,7 +180,14 @@ async def sync_targets(store, adapter, owner):
             if not job["product_id"] and job["quantity"] > 0:
                 if not job["ean"].isdigit():
                     raise ConnectorError("unmatched", "Choisissez le produit et le format souhaités pour cet article.")
-                matches = await adapter.search_by_ean(job["ean"])
+                try:
+                    matches = await adapter.search_by_ean(job["ean"])
+                except ConnectorError as error:
+                    record_lookup(store, job["ean"], "unavailable", error.message)
+                    raise
+                lookup_status = "matched" if len(matches)==1 else "ambiguous" if matches else "not_found"
+                lookup_message = "Produit confirmé par le service EAN du magasin." if len(matches)==1 else "Plusieurs produits correspondent à cet EAN. Choisissez le produit et le format." if matches else getattr(adapter,"ean_lookup_message","EAN non résolu dans ce magasin. Une recherche par nom est proposée.")
+                record_lookup(store, job["ean"], lookup_status, lookup_message)
                 if len(matches) != 1:
                     raise ConnectorError("unmatched", "Aucun produit unique confirmé par EAN. Recherchez et choisissez un produit.")
                 product = matches[0]
@@ -199,3 +212,9 @@ async def sync_targets(store, adapter, owner):
                 raise
             with engine.begin() as connection:
                 connection.execute(update(targets).where(*condition).values(status=error.status, message=error.message, retry_at=time.time() + 300))
+
+
+def record_lookup(store, ean, status, message):
+    with engine.begin() as connection:
+        entry = insert_for(ean_lookups).values(store=store,ean=ean,status=status,message=message[:500],checked_at=time.time())
+        connection.execute(entry.on_conflict_do_update(index_elements=[ean_lookups.c.store,ean_lookups.c.ean],set_={"status":status,"message":message[:500],"checked_at":time.time()}))

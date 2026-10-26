@@ -12,6 +12,8 @@ Implemented tables (created on API startup):
   product association, candidate products, observed price and per-item sync result.
 - `store_cart_snapshots`: normalized store lines and reported amounts, account/store
   fingerprint and fetch time. It never contains raw customer or payment data.
+- `store_ean_lookups`: per-store/item lookup outcome, controlled explanation and time.
+- `product_facts`: cached Open Food Facts name, brand and pack size for search hints.
 
 The app supports one shared household list. Item changes and sync targets commit in
 one transaction. Targets coalesce changes into the latest desired quantity; removal
@@ -21,7 +23,8 @@ Revision checks prevent completion of an older operation from erasing a newer ch
 
 Named items use a deterministic `n`-prefixed internal identifier in the existing item
 key column. Barcode scans remain numeric and their schema/transport is unchanged.
-Only new tables are created for snapshots; existing item tables do not need altering.
+Snapshots, lookup outcomes and product facts use new tables; existing item tables do
+not need altering.
 
 Planned tables:
 - `shopping_lists`

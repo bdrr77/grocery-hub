@@ -11,6 +11,7 @@ from .database import STORES, add_barcode, engine, enqueue, items, list_items, m
 from .connectors.base import ConnectorError
 from .integration_service import initialize, operate, public_status
 from .products import product_label
+from .matching import search_suggestions
 from .schemas import HealthResponse, ScanRequest, ScanResponse, ShoppingItemResponse, StoreSearchRequest, StoreMatchRequest, VerificationRequest, NamedItemRequest, QuantityRequest
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -127,8 +128,16 @@ async def store_action(store, action, **kwargs):
     try:
         return await operate(store, action, **kwargs)
     except ConnectorError as error:
-        code = 409 if error.status in {"busy", "invalid_match"} else 404 if error.status == "not_found" else 400
+        code = 409 if error.status in {"busy", "invalid_match"} else 404 if error.status == "not_found" else 502 if error.status in {"search_error", "ean_lookup_error"} else 400
         raise HTTPException(status_code=code, detail=error.message) from error
+
+
+@app.get("/api/v1/items/{ean}/search-suggestions")
+def item_search_suggestions(ean: str):
+    try:
+        return search_suggestions(ean)
+    except ConnectorError as error:
+        raise HTTPException(status_code=404, detail=error.message) from error
 
 
 @app.post("/api/v1/integrations/{store}/connect")

@@ -44,7 +44,7 @@ class PicnicProtocolTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await adapter.close()
 
-    async def test_search_does_not_invent_ean_matches(self):
+    async def test_name_search_does_not_claim_an_ean_match(self):
         process = Mock(returncode=0)
         process.communicate = AsyncMock(return_value=(json.dumps({"data":[{"id":"s123","name":"Nutella","eans":[],"price_cents":399,"size":"400 g"}]}).encode(),b""))
         adapter = PicnicAdapter(Settings(),{"token":"private-valid"})
@@ -52,10 +52,69 @@ class PicnicProtocolTests(unittest.IsolatedAsyncioTestCase):
             with patch("app.connectors.picnic.asyncio.create_subprocess_exec",new_callable=AsyncMock,return_value=process) as spawn:
                 result = await adapter.search("Nutella")
                 self.assertEqual(result[0].price_cents,399)
-                self.assertEqual(await adapter.search_by_ean("3017620422003"),[])
+                self.assertEqual(result[0].eans,[])
                 self.assertEqual(spawn.await_count,1)
                 self.assertNotIn("private-valid",str(spawn.call_args))
                 self.assertEqual(json.loads(process.communicate.call_args.args[0])["token"],"private-valid")
+        finally:
+            await adapter.close()
+
+    async def test_french_ean_resolver_is_anonymous_and_verifies_product(self):
+        calls = []
+        def handle(request):
+            calls.append(str(request.url))
+            self.assertNotIn("x-picnic-auth",request.headers)
+            self.assertNotIn("authorization",request.headers)
+            if request.url.host == "picnic.app":
+                return httpx.Response(301,headers={"Location":"https://gtin-resolver-prod.fr.picnicinternational.com/qr/gtin/3017620422003"})
+            return httpx.Response(302,headers={"Location":"https://picnic.app/link/store/storefront/product-detail;id=s1035674"})
+        adapter = PicnicAdapter(Settings(picnic_country_code="FR"),{"token":"private"},httpx.MockTransport(handle))
+        adapter._run = AsyncMock(return_value={"id":"s1035674","name":"Nutella","eans":[],"price_cents":375,"size":"400 g"})
+        try:
+            products = await adapter.search_by_ean("3017620422003")
+            self.assertEqual(products[0].eans,["3017620422003"])
+            self.assertEqual(products[0].id,"s1035674")
+            self.assertEqual(len(calls),2)
+            adapter._run.assert_awaited_once_with("product",product_id="s1035674")
+        finally:
+            await adapter.close()
+
+    async def test_missing_ean_and_untrusted_redirect_do_not_produce_matches(self):
+        for response in [httpx.Response(404),httpx.Response(302,headers={"Location":"https://other.example/product;id=s123"}),httpx.Response(302,headers={"Location":"https://picnic.app/nl/link/store/storefront"})]:
+            calls = []
+            def handle(request):
+                calls.append(str(request.url))
+                return response
+            adapter = PicnicAdapter(Settings(),{"token":"private"},httpx.MockTransport(handle))
+            adapter._run = AsyncMock()
+            try:
+                self.assertEqual(await adapter.search_by_ean("3017620422003"),[])
+                self.assertLessEqual(len(calls),6)
+                adapter._run.assert_not_awaited()
+            finally:
+                await adapter.close()
+
+    async def test_qr_resolution_does_not_accept_a_different_catalog_product(self):
+        adapter = PicnicAdapter(Settings(),{"token":"private"},httpx.MockTransport(lambda request:httpx.Response(302,headers={"Location":"https://picnic.app/link/product-detail;id=s123"})))
+        adapter._run = AsyncMock(return_value={"id":"s999","name":"Other","eans":[],"price_cents":100,"size":"1 kg"})
+        try:
+            with self.assertRaises(ConnectorError) as error:
+                await adapter.search_by_ean("3017620422003")
+            self.assertEqual(error.exception.status,"ean_lookup_error")
+        finally:
+            await adapter.close()
+
+    async def test_catalog_error_reports_controlled_step_and_upstream_status(self):
+        process = Mock(returncode=1)
+        process.communicate = AsyncMock(return_value=(b'{"error":"request_failed","http_status":404,"step":"search-action"}',b"private-token"))
+        adapter = PicnicAdapter(Settings(),{"token":"private"})
+        try:
+            with patch("app.connectors.picnic.asyncio.create_subprocess_exec",new_callable=AsyncMock,return_value=process):
+                with self.assertRaises(ConnectorError) as error:
+                    await adapter.search("Nutella")
+                self.assertIn("action de recherche",str(error.exception))
+                self.assertIn("HTTP amont 404",str(error.exception))
+                self.assertNotIn("private",str(error.exception))
         finally:
             await adapter.close()
 

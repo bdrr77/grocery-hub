@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { execute, searchProducts } from "../app/connectors/picnic-search.mjs";
+import { execute, failureDetails, searchProducts } from "../app/connectors/picnic-search.mjs";
 
 const require = createRequire(import.meta.url);
 const library = require("picnic-api");
@@ -48,6 +48,34 @@ test("empty product results are valid but malformed responses fail", async () =>
   class Malformed { catalog = {getSearchResults:async()=>({unknown:[]})}; }
   assert.deepEqual(await searchProducts(input,Empty),[]);
   await assert.rejects(searchProducts(input,Malformed));
+});
+
+test("French accounts receiving a Fusion search page can still search", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({body:{child:{type:"SELLING_UNIT_TILE",sellingUnit:{id:"s123",name:"Nutella",display_price:375,unit_quantity:"400 g",max_count:10}}}});
+  try {assert.deepEqual(await searchProducts(input,Client),[{id:"s123",name:"Nutella",eans:[],price_cents:375,size:"400 g"}]);}
+  finally {globalThis.fetch = original;}
+});
+
+test("upstream search failure identifies its step without returning response bodies", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response("private-token private-password",{status:400});
+  try {
+    await assert.rejects(searchProducts(input,Client),error=>{
+      const details = failureDetails(error);
+      assert.equal(details.step,"search-page");
+      assert.equal(details.http_status,400);
+      assert.ok(!JSON.stringify(details).includes("private"));
+      return true;
+    });
+  } finally {globalThis.fetch = original;}
+});
+
+test("an EAN-resolved product is fetched through the package catalog", async () => {
+  class ProductClient {catalog={getProduct:async id=>({id,name:"Nutella",displayPrice:375,unitQuantity:"400 g",maxCount:10})};}
+  const result = await execute({...input,action:"product",product_id:"s1035674"},ProductClient);
+  assert.equal(result.data.id,"s1035674");
+  assert.equal(result.data.size,"400 g");
 });
 
 test("package login and SMS verification return private session updates", async () => {

@@ -3,7 +3,9 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 type Item = { ean: string; label: string; quantity: number };
-type SyncItem = { ean: string; quantity: number; status: string; message: string; product_id: string | null; product_name: string | null; price_cents: number | null };
+type Lookup = {status:string;message:string;checked_at:number};
+type Suggestion = {source:"chronodrive"|"openfoodfacts"|"user";query:string;name:string;size:string};
+type SyncItem = { ean: string; quantity: number; status: string; message: string; product_id: string | null; product_name: string | null; price_cents: number | null; ean_lookup?:Lookup|null };
 type Pricing = {fresh:boolean;fetched_at:number|null;list_complete:boolean;list_total_cents:number|null;known_list_total_cents:number|null;priced_items:number;item_count:number;missing_items:number;cart_total_cents:number|null;deposit_cents:number|null;fees_cents:number|null;discount_cents:number|null;other_cart_items:number|null};
 type Integration = { id: string; name: string; status: string; connected: boolean; configured: boolean; message: string; checked_at: number | null; items: SyncItem[]; pricing?:Pricing };
 type Product = { id: string; name: string; price_cents: number | null; size: string; eans: string[] };
@@ -35,6 +37,9 @@ export default function Home() {
   const [selection, setSelection] = useState<{store: string; ean: string; query: string} | null>(null);
   const [candidates, setCandidates] = useState<Product[]>([]);
   const [searched, setSearched] = useState(false);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [searchError, setSearchError] = useState("");
+  const [lookup, setLookup] = useState<Lookup|null>(null);
   const pendingScan = useRef<{ value: string; event_id: string } | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -127,12 +132,35 @@ export default function Home() {
   async function searchProducts(event: FormEvent) {
     event.preventDefault();
     if (!selection || storeBusy) return;
-    setStoreBusy(`${selection.store}/search`); setError(""); setNotice(""); setCandidates([]); setSearched(false);
+    setStoreBusy(`${selection.store}/search`); setError(""); setSearchError(""); setNotice(""); setCandidates([]); setSearched(false);
     try {
       setCandidates(await api<Product[]>(`integrations/${selection.store}/search`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ean:selection.ean, query:selection.query.trim()})}));
       setSearched(true);
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) { setSearchError((e as Error).message); }
     finally { setStoreBusy(""); await refreshConnections(); }
+  }
+
+  async function openPicker(store:string, item:Item) {
+    if(storeBusy) return;
+    setSelection({store,ean:item.ean,query:item.label.startsWith("EAN ")?"":item.label.slice(0,200)});
+    setCandidates([]); setSuggestions([]); setSearchError(""); setLookup(null); setSearched(false); setError(""); setNotice("");
+    setStoreBusy(`${store}/search`);
+    try {
+      const hints = await api<{suggestions:Suggestion[];ean_lookup:Lookup|null}>(`items/${item.ean}/search-suggestions`);
+      setSuggestions(hints.suggestions); setLookup(hints.ean_lookup);
+      const tried = new Set<string>();
+      for(const hint of hints.suggestions.filter(hint=>hint.source!=="user" && hint.query.trim())) {
+        if(tried.has(hint.query.toLocaleLowerCase())) continue;
+        tried.add(hint.query.toLocaleLowerCase());
+        setSelection({store,ean:item.ean,query:hint.query});
+        const results = await api<Product[]>(`integrations/${store}/search`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ean:item.ean,query:hint.query})});
+        if(results.length) {setCandidates(results); setSearched(true); return;}
+      }
+      const manual = hints.suggestions.find(hint=>hint.source==="user");
+      if(manual) setSelection({store,ean:item.ean,query:manual.query});
+      setSearched(tried.size>0);
+    } catch(e) {setSearchError((e as Error).message);}
+    finally {setStoreBusy(""); await refreshConnections();}
   }
 
   const comparable = connections.length===2 && connections.every(store=>store.pricing?.list_complete && store.pricing.item_count===items.length && items.length>0);
@@ -197,8 +225,9 @@ export default function Home() {
           const job = store.items.find(job => job.ean === item.ean);
           return <div key={store.id}><strong>{store.name}</strong>{job?.product_name && <span>{job.product_name}</span>}
             <small>{!store.connected ? store.message : job?.message || "En attente de synchronisation."}</small>
+            {job?.ean_lookup && !job.product_id && <small>{job.ean_lookup.message}</small>}
             {job?.price_cents != null && <small>Prix observé : {money(job.price_cents)} / unité</small>}
-            {store.connected && !job?.product_id && <button type="button" disabled={!!storeBusy} onClick={()=>{setSelection({store:store.id,ean:item.ean,query:item.label.startsWith("EAN ")?"":item.label.slice(0,200)});setCandidates([]);setSearched(false);}}>Choisir chez {store.name}</button>}
+            {store.connected && !job?.product_id && <button type="button" disabled={!!storeBusy} onClick={()=>void openPicker(store.id,item)}>Choisir chez {store.name}</button>}
           </div>;
         })}</div>
       </article>)}</div>
@@ -206,6 +235,10 @@ export default function Home() {
     {selection && <section className="product-picker" aria-labelledby="picker-title">
       <div className="connection-heading"><h2 id="picker-title">Choisir chez {connections.find(store=>store.id===selection.store)?.name}</h2><button type="button" disabled={!!storeBusy} onClick={()=>setSelection(null)}>Fermer</button></div>
       <p>{items.find(item=>item.ean===selection.ean)?.label || "Article sélectionné"}. Choisissez le produit et le format souhaités.</p>
+      <p className="hint">Format recherché : poids, volume ou taille du paquet. Quantité à acheter : {items.find(item=>item.ean===selection.ean)?.quantity || 1}.</p>
+      {selection.store==="picnic" && lookup && <p className="hint">{lookup.message}</p>}
+      {!!suggestions.length && <div className="search-suggestions" aria-label="Suggestions de recherche">{suggestions.filter(hint=>hint.query).map(hint=><button type="button" disabled={!!storeBusy} key={hint.source} onClick={()=>setSelection({...selection,query:hint.query})}>{hint.source==="chronodrive" ? "Chronodrive" : hint.source==="openfoodfacts" ? "Open Food Facts" : "Ma recherche"} : {hint.query}</button>)}</div>}
+      {searchError && <p className="error" role="alert">{searchError}</p>}
       <form onSubmit={searchProducts}><label htmlFor="store-query">Rechercher un produit</label><div className="search-row"><input id="store-query" required maxLength={200} value={selection.query} onChange={event=>setSelection({...selection,query:event.target.value})}/><button type="submit" disabled={!!storeBusy}>Rechercher</button></div></form>
       {storeBusy.endsWith("/search") && <p role="status">Recherche en cours…</p>}
       {searched && !candidates.length && <p>Aucun produit trouvé. Essayez un autre nom.</p>}

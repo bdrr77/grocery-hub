@@ -2,9 +2,16 @@
 import asyncio
 import json
 import os
+import re
+import logging
 from pathlib import Path
+from urllib.parse import unquote, urljoin, urlparse
+
+import httpx
 
 from .base import ConnectorError, Product, StoreAdapter
+
+log = logging.getLogger(__name__)
 
 
 class PicnicAdapter(StoreAdapter):
@@ -39,7 +46,18 @@ class PicnicAdapter(StoreAdapter):
             if result.get("code") == "QUANTITY_MISMATCH":
                 raise ConnectorError("quantity_mismatch", "Picnic n’a pas accepté la quantité demandée (stock ou limite d’achat).")
             if process.returncode or result.get("error") or "data" not in result:
-                raise ValueError("Picnic operation failed")
+                stages = {"search-page":"page de recherche", "search-action":"action de recherche", "bootstrap":"configuration du catalogue", "client-chunk":"composant de recherche", "search-format":"format de recherche", "product-page":"fiche produit", "search-parameters":"paramètres de recherche", "search-action-discovery":"détection de l’action"}
+                step = result.get("step")
+                details = [stages[step]] if step in stages else []
+                http_status = result.get("http_status")
+                if isinstance(http_status, int) and 100 <= http_status <= 599:
+                    details.append(f"HTTP amont {http_status}")
+                if result.get("received_format") in {"fusion", "rsc"}:
+                    details.append("format " + result["received_format"])
+                log.warning("Picnic operation=%s step=%s upstream_status=%s", action, step if step in stages else "unknown", http_status if isinstance(http_status,int) else None)
+                state = "search_error" if action == "search" else "ean_lookup_error" if action == "product" else "upstream_error"
+                message = " ; ".join(details) or "réponse du catalogue non reconnue"
+                raise ConnectorError(state, f"Picnic : {message}. Réessayez ou modifiez la recherche.")
             if isinstance(result.get("session"), dict):
                 self.session.update({key: result["session"][key] for key in ("token", "otp_required") if key in result["session"]})
             return result["data"]
@@ -83,8 +101,47 @@ class PicnicAdapter(StoreAdapter):
         return [Product(**product) for product in data]
 
     async def search_by_ean(self, ean):
-        # The modern search catalog does not expose verified GTINs.
-        return []
+        self.ean_lookup_message = "Le service EAN Picnic ne renvoie pas de produit vérifiable. Une recherche par nom est proposée."
+        if not re.fullmatch(r"[0-9]{8,32}", ean):
+            return []
+        country = self.settings.picnic_country_code.lower()
+        url = f"https://picnic.app/{country}/qr/gtin/{ean}"
+        allowed = {"picnic.app", "www.picnic.app", f"gtin-resolver-prod.{country}.picnicinternational.com"}
+        product_id = None
+        try:
+            # The QR route is public: never send account tokens or follow arbitrary hosts.
+            for _ in range(6):
+                parsed = urlparse(url)
+                if parsed.scheme != "https" or parsed.hostname not in allowed or parsed.username or parsed.password or parsed.port not in {None,443}:
+                    break
+                response = await self.client.get(url)
+                if response.status_code in {404,410}:
+                    self.ean_lookup_message = "EAN absent du service de résolution Picnic. Une recherche par nom est proposée."
+                    return []
+                if response.status_code not in {200,301,302,303,307,308}:
+                    raise ConnectorError("ean_lookup_error", f"Résolution EAN Picnic indisponible (HTTP amont {response.status_code}). Une recherche par nom reste possible.")
+                target = urljoin(url, response.headers.get("location", ""))
+                if not response.headers.get("location"):
+                    return []
+                destination = urlparse(target)
+                if destination.scheme not in {"https", "picnic"} or destination.username or destination.password or destination.scheme == "https" and (destination.hostname not in allowed or destination.port not in {None,443}):
+                    return []
+                match = re.search(r"(?:;|[?&])id=([A-Za-z0-9_-]{1,128})(?=$|[;&?#/])", unquote(target))
+                if match:
+                    product_id = match[1]
+                    break
+                url = target
+        except httpx.HTTPError as error:
+            raise ConnectorError("ean_lookup_error", "Le service EAN Picnic est injoignable. Une recherche par nom reste possible.") from error
+        if not product_id:
+            return []
+        data = await self._run("product", product_id=product_id)
+        if data is None:
+            self.ean_lookup_message = "L’EAN correspond à un produit Picnic, mais sa fiche n’est pas disponible pour ce compte. Une recherche par nom est proposée."
+            return []
+        if not isinstance(data, dict) or data.get("id") != product_id:
+            raise ConnectorError("ean_lookup_error", "La fiche Picnic ne confirme pas le produit résolu par EAN.")
+        return [Product(**{**data, "eans":[ean]})]
 
     async def get_cart_details(self):
         data = await self._run("cart")

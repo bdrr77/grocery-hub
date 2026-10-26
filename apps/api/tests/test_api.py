@@ -13,7 +13,7 @@ os.environ["SCANNER_DEVICE_TOKENS"] = "test:secret,other:other-secret"
 
 from fastapi.testclient import TestClient
 from app.main import app
-from app.database import engine, integrations, metadata, targets
+from app.database import cart_snapshots, ean_lookups, engine, integrations, metadata, targets
 from app.config import settings
 from app.connectors.base import ConnectorError, Product
 from app.connectors.picnic import PicnicAdapter
@@ -222,8 +222,60 @@ class ShoppingListTests(unittest.TestCase):
         store.search = fail_search
         with patch("app.integration_service.adapter_for", return_value=store):
             response = self.client.post("/api/v1/integrations/picnic/search", json={"ean":"3017620422003","query":"Nutella"})
-        self.assertEqual(response.status_code,400)
+        self.assertEqual(response.status_code,502)
         self.assertTrue(public_status()[0]["connected"])
+
+    def test_search_suggestions_prefer_chronodrive_pack_then_off_then_user(self):
+        self.add()
+        with engine.begin() as connection:
+            connection.execute(update(targets).where(targets.c.store=="chronodrive").values(product_id="c1",product_name="Nutella",status="synced"))
+            connection.execute(cart_snapshots.insert().values(store="chronodrive",fingerprint="test",fetched_at=1,data={"lines":[{"id":"c1","name":"Nutella","size":"400 g","quantity":3}]}))
+        with patch("app.matching.product_details",return_value={"name":"Pâte à tartiner","brand":"Ferrero","size":"400 g"}) as lookup:
+            response = self.client.get("/api/v1/items/3017620422003/search-suggestions")
+            self.assertEqual(response.status_code,200)
+            suggestions = response.json()["suggestions"]
+            self.assertEqual([hint["source"] for hint in suggestions],["chronodrive","openfoodfacts","user"])
+            self.assertEqual(suggestions[0]["query"],"Nutella 400 g")
+            self.assertNotIn("3",suggestions[0]["query"])
+            self.assertEqual(suggestions[1]["query"],"Ferrero Pâte à tartiner 400 g")
+            self.client.get("/api/v1/items/3017620422003/search-suggestions")
+            self.assertEqual(lookup.call_count,1)
+
+    def test_ean_attempt_is_recorded_and_not_inferred_from_name_search(self):
+        self.configured_store()
+        self.add()
+        store = FakeStore()
+        store.matches = []
+        with patch("app.integration_service.adapter_for",return_value=store):
+            asyncio.run(operate("picnic"))
+        job = public_status()[0]["items"][0]
+        self.assertEqual(job["ean_lookup"]["status"],"not_found")
+        self.assertIsNone(job["product_id"])
+
+    def test_search_suggestions_fall_back_to_user_when_off_is_unavailable(self):
+        self.add()
+        with patch("app.matching.product_details",return_value=None) as lookup:
+            first = self.client.get("/api/v1/items/3017620422003/search-suggestions")
+            self.client.get("/api/v1/items/3017620422003/search-suggestions")
+        self.assertEqual([hint["source"] for hint in first.json()["suggestions"]],["user"])
+        self.assertEqual(lookup.call_count,1)
+        self.assertEqual(first.json()["suggestions"][0]["query"],"Test product")
+        self.assertEqual(self.client.get("/api/v1/items/00000000/search-suggestions").status_code,404)
+
+    def test_old_skipped_ean_is_requeued_only_until_a_real_attempt(self):
+        from app.integration_service import initialize
+        self.add()
+        with engine.begin() as connection:
+            connection.execute(update(targets).where(targets.c.store=="picnic").values(status="unmatched"))
+        initialize()
+        self.assertEqual(self.rows()[0]["status"],"queued")
+        self.configured_store()
+        store = FakeStore()
+        store.matches = []
+        with patch("app.integration_service.adapter_for",return_value=store):
+            asyncio.run(operate("picnic"))
+        initialize()
+        self.assertEqual(self.rows()[0]["status"],"unmatched")
 
     def test_unknown_store_and_otp_input_validation(self):
         self.assertEqual(self.client.post("/api/v1/integrations/unknown/connect").status_code, 404)

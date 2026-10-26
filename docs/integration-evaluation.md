@@ -20,6 +20,13 @@ version; this evaluation does not establish that it fails for every French accou
 No production account was used, no remote cart was changed and no release was published
 as part of this evaluation. All authenticated response fixtures are synthetic.
 
+Follow-up implementation: Picnic's public French QR resolver was subsequently tested
+anonymously with EAN `3017620422003` and returned product ID `s1035674`. The app now
+uses that resolver and verifies the resulting product against the authenticated catalog.
+This supersedes the earlier decision to skip EAN matching. It still does not establish
+availability for every account. JSON/PML search fallback and controlled upstream-step
+diagnostics were also added alongside RSC search support.
+
 ## Packages examined
 
 | Candidate | Verified strengths | Limitations for this app |
